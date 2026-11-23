@@ -1,6 +1,8 @@
-"""Rapor (4.18)–(4.23): bireysel ekip zinciri ve Çizelge 5.1."""
+"""Rapor (4.18)–(4.33), (4.36)–(4.39) ve Çizelge 5.1."""
 
 from __future__ import annotations
+
+import time
 
 import pulp
 import pytest
@@ -8,27 +10,36 @@ import pytest
 from data.section_5_3 import PERIODS, section_5_3
 from model.chain_checks import chain_violations
 from model.instance import Center, Instance, Scenario, Site, TeamType
-from model.network import build_network, route_h
+from model.network import REPORT_PERIODS, build_network, route_h, travel_sey
 from model.routing import chain_rows, constraint_names, format_routing, solve_team_chains
 
-# s1 ve s2 aynı h desenine düşer. s3'te yalnız J1–I2 ve J2–I3 açıktır.
-# Dönüş kopyası ℓ = enkaz sırası + 1. Sıra I1=1, … olduğu için I2 ℓ=3'e, I3 ℓ=4'e döner.
+# Varış periyodu saatten gelir. ℓ enkaz sırasını kesmez.
 S1_CHAINS = {
-    "hafif-1": ["σ", "o_J2", "(I2,1)", "(J2,1,3)", "(I3,1)", "(J2,1,4)", "(I4,1)", "ω"],
-    "orta-1": ["σ", "o_J2", "(I2,1)", "(J2,1,3)", "(I3,1)", "ω"],
-    "orta-2": ["σ", "o_J1", "(I1,1)", "ω"],
-    "agir-1": ["σ", "o_J1", "(I1,1)", "ω"],
+    "hafif-1": ["σ", "o_J2", "(I2,1)", "(J2,2,1)", "(I3,3)", "(J2,3,1)", "(I4,4)", "(J2,5,1)", "ω"],
+    "orta-1": ["σ", "o_J1", "(I1,1)", "(J1,2,1)", "(I2,3)", "(J1,3,1)", "ω"],
+    "orta-2": ["σ", "o_J2", "(I2,1)", "(J2,2,1)", "(I3,3)", "(J2,3,1)", "(I4,4)", "(J2,5,1)", "ω"],
+    "agir-1": ["σ", "o_J1", "(I1,1)", "(J1,2,1)", "(I2,3)", "(J1,3,1)", "ω"],
+}
+S2_CHAINS = {
+    "hafif-1": S1_CHAINS["hafif-1"],
+    "orta-2": S1_CHAINS["orta-2"],
+    "orta-1": ["σ", "o_J1", "(I1,1)", "(J1,2,1)", "(I2,3)", "(J1,4,1)", "ω"],
+    "agir-1": ["σ", "o_J1", "(I1,1)", "(J1,2,1)", "(I2,3)", "(J1,4,1)", "ω"],
 }
 S3_CHAINS = {
-    "hafif-1": ["σ", "o_J2", "(I3,1)", "ω"],
-    "orta-1": ["σ", "o_J2", "(I3,1)", "ω"],
-    "orta-2": ["σ", "o_J1", "(I2,1)", "ω"],
-    "agir-1": ["σ", "o_J1", "(I2,1)", "ω"],
+    "hafif-1": ["σ", "o_J2", "(I3,1)", "(J2,2,1)", "ω"],
+    "orta-2": ["σ", "o_J2", "(I3,1)", "(J2,2,1)", "ω"],
+    "orta-1": ["σ", "o_J1", "(I2,1)", "(J1,2,1)", "ω"],
+    "agir-1": ["σ", "o_J1", "(I2,1)", "(J1,2,1)", "ω"],
 }
+
+
+def route_sey(instance, arc, scenario):
+    return travel_sey(instance, arc.u.physical(), arc.v.physical(), arc.departure_t, scenario)
 
 
 def _solve(instance, periods=None, reentry_ban=True):
-    solver = pulp.PULP_CBC_CMD(msg=False, gapRel=0, threads=1)
+    solver = pulp.PULP_CBC_CMD(msg=False, gapRel=0, threads=1, timeLimit=90)
     return solve_team_chains(
         instance,
         solver=solver,
@@ -52,35 +63,14 @@ def _one_center_instance(sites, teams, scenarios, tau, n_max=1, u_top=0, w_top=0
     )
 
 
-def _assert_acyclic(arcs) -> None:
-    successors: dict[str, list[str]] = {}
-    nodes: set[str] = set()
-    for arc in arcs:
-        successors.setdefault(arc.u.key, []).append(arc.v.key)
-        nodes.add(arc.u.key)
-        nodes.add(arc.v.key)
-    color: dict[str, int] = {}
-
-    def walk(node: str) -> None:
-        color[node] = 1
-        for nxt in successors.get(node, []):
-            state = color.get(nxt, 0)
-            if state == 1:
-                raise AssertionError(f"çevrim {node} → {nxt}")
-            if state == 0:
-                walk(nxt)
-        color[node] = 2
-
-    for node in nodes:
-        if color.get(node, 0) == 0:
-            walk(node)
-
-
 def test_network_follows_section_4_3_and_the_two_hour_rule():
     instance = section_5_3()
     short = build_network(instance, periods=1)
     horizon = build_network(instance, periods=PERIODS)
 
+    assert REPORT_PERIODS == 36
+    assert horizon.horizon == 72
+    assert horizon.big_m == 74
     assert "d_I1_t1" in short.by_key
     assert "d_I1_t36" in horizon.by_key
     assert horizon.by_key["o_J1"].period() == 1
@@ -94,6 +84,7 @@ def test_network_follows_section_4_3_and_the_two_hour_rule():
         assert ("d_I1_t36", "omega", "end") in keys
         assert any(arc.kind == "enroute" and arc.u.i == "I2" and arc.v.j == "J1" for arc in arcs)
         assert not any(arc.kind == "enroute" and arc.u.i == "I5" for arc in arcs)
+        assert any(arc.kind == "travel" and arc.crosses for arc in arcs)
         assert not any(arc.v.kind == "sigma" or arc.u.kind == "omega" for arc in arcs)
         assert not any(arc.v.kind == "origin" and arc.u.kind != "sigma" for arc in arcs)
         sigma_heads = {arc.v.kind for arc in arcs if arc.u.kind == "sigma"}
@@ -104,11 +95,17 @@ def test_network_follows_section_4_3_and_the_two_hour_rule():
             if start is not None and end is not None:
                 assert end >= start
             if arc.kind == "travel":
-                assert arc.u.period() == arc.v.period()
-                assert route_h(instance, arc.u.physical(), arc.v.physical(), arc.u.period(), scenario) == 1
+                assert arc.v.period() >= arc.u.period()
+                assert route_h(
+                    instance, arc.u.physical(), arc.v.physical(), arc.departure_t, scenario
+                ) == 1
+                assert arc.sey == pytest.approx(
+                    route_sey(instance, arc, scenario)
+                )
                 assert {arc.u.kind, arc.v.kind} != {"debris"}
                 assert "debris" in {arc.u.kind, arc.v.kind}
             if arc.kind == "continue":
+                assert arc.sey == 0
                 assert arc.u.i == arc.v.i and arc.v.t == arc.u.t + 1
             if arc.kind == "end" and arc.u.kind == "debris":
                 assert arc.u.t == PERIODS
@@ -118,7 +115,11 @@ def test_network_follows_section_4_3_and_the_two_hour_rule():
                 raise AssertionError("J1–I4 iki saat kuralını aşıyor")
             if "I5" in ends and arc.kind == "travel":
                 raise AssertionError("I5 hiçbir merkezden iki saatin altında değil")
-        _assert_acyclic(arcs)
+    open_arcs = horizon.arcs["s1"]
+    # Eski ℓ kuralı yüksek kopyadan küçük indisli enkaza çıkışı keserdi.
+    assert any(arc.kind == "travel" and arc.u.key == "c_J2_t1_l4" and arc.v.i == "I2" for arc in open_arcs)
+    assert any(arc.u.key == "c_J2_t1_l1" and arc.v.key == "d_I2_t1" for arc in open_arcs)
+    assert any(arc.u.key == "d_I2_t1" and arc.v.key == "c_J2_t1_l1" for arc in open_arcs)
 
     assert route_h(instance, "J2", "I4", 1, instance.scenarios[0]) == 1
     assert route_h(instance, "I4", "J2", 3, instance.scenarios[0]) == 1
@@ -126,8 +127,8 @@ def test_network_follows_section_4_3_and_the_two_hour_rule():
     assert route_h(instance, "J1", "I5", 1, instance.scenarios[0]) == 0
 
 
-def test_constraint_names_cover_4_18_through_4_23():
-    names = constraint_names(section_5_3())
+def test_constraint_names_cover_the_period_equations():
+    names = constraint_names(section_5_3(), periods=2)
     for prefix in (
         "eq_4_4_",
         "eq_4_5_",
@@ -142,26 +143,41 @@ def test_constraint_names_cover_4_18_through_4_23():
         "eq_4_21_",
         "eq_4_22_",
         "eq_4_23_",
+        "eq_4_24_",
+        "eq_4_25_",
+        "eq_4_27_",
+        "eq_4_28_",
+        "eq_4_29_",
+        "eq_4_30_",
+        "eq_4_31_",
+        "eq_4_32_",
+        "eq_4_33_",
+        "eq_4_36_",
+        "eq_4_37_",
+        "eq_4_38_",
+        "eq_4_39_",
     ):
-        assert any(name.startswith(prefix) for name in names)
-    for later in ("eq_4_24_", "eq_4_29_", "eq_4_30_", "eq_4_34_", "eq_4_46_"):
+        assert any(name.startswith(prefix) for name in names), prefix
+    for later in ("eq_4_11_", "eq_4_34_", "eq_4_46_"):
         assert not any(name.startswith(later) for name in names)
 
-    relaxed = constraint_names(section_5_3(), reentry_ban=False)
+    relaxed = constraint_names(section_5_3(), periods=2, reentry_ban=False)
     assert not any(name.startswith("eq_4_23_") for name in relaxed)
 
 
 def test_section_53_optimal_chains_and_equations():
     instance = section_5_3()
+    started = time.perf_counter()
     solution = _solve(instance)
+    print(f"çözüm süresi {time.perf_counter() - started:.1f} sn")
     print(format_routing(instance, solution))
 
     assert solution.status == "Optimal"
-    assert solution.periods == 1
+    assert solution.periods == PERIODS == 36
+    assert solution.horizon == 72
     assert not chain_violations(instance, solution)
-    # s1/s2 kazancı, her ekibin birden fazla açık enkaza girmesinden gelir.
-    # Madde 1 amacı 19.9 = 0.30*(268/15) + 0.45*(268/15) + 0.25*26.
-    # Burada s1 = s2 = 10, s3 = 26; beklenti 14 = 19.9 - 5.9.
+    # s1 = s2 = 10, s3 = 26. Beklenti 14. Madde 2'nin tek periyot sonucu da 14'tü;
+    # fark, aynı kapsamın artık gerçek saatlerde durmasıdır.
     assert solution.objective == pytest.approx(14.0)
     assert solution.G == {"J1": 1, "J2": 1}
     assert solution.V == {
@@ -174,7 +190,7 @@ def test_section_53_optimal_chains_and_equations():
     }
     assert solution.VU == {"J1": 0, "J2": 0}
     assert solution.VW == {"J1": 0, "J2": 0}
-    for scenario_s, expected in (("s1", S1_CHAINS), ("s2", S1_CHAINS), ("s3", S3_CHAINS)):
+    for scenario_s, expected in (("s1", S1_CHAINS), ("s2", S2_CHAINS), ("s3", S3_CHAINS)):
         for team in solution.teams:
             assert solution.chains[(team.r, scenario_s)] == expected[team.r]
             assert solution.chains[(team.r, scenario_s)][0] == "σ"
@@ -198,6 +214,21 @@ def test_section_53_optimal_chains_and_equations():
     rows = chain_rows(instance, solution)
     assert len(rows) == 12
     assert rows[0]["Zincir"].startswith("σ →")
+    assert "1.65" in rows[0]["Zaman"] or rows[0]["Ekip"] != "hafif-1"
+    trip = next(
+        item
+        for item in solution.crossings
+        if item.team == "hafif-1" and item.scenario == "s1" and item.origin == "(I2,1)"
+    )
+    assert trip.departure_period == 1
+    assert trip.arrival_period == 2
+    assert trip.beta == pytest.approx(0.10)
+    assert trip.sey == pytest.approx(1.65)
+    assert trip.arrive_h == pytest.approx(trip.depart_h + trip.sey)
+    assert trip.depart_h == pytest.approx(1.65)
+    assert solution.inventory[("J2", "hafif", 0, "s1")] == 1
+    assert solution.inventory[("J2", "hafif", 1, "s1")] == 0
+    assert solution.inventory[("J2", "hafif", 5, "s1")] == 1
 
 
 def test_known_two_site_chain_is_optimal():
@@ -226,10 +257,15 @@ def test_known_two_site_chain_is_optimal():
         "σ",
         "o_J1",
         "(I1,1)",
-        "(J1,1,2)",
+        "(J1,1,1)",
         "(I2,1)",
+        "(J1,1,2)",
         "ω",
     ]
+    clock = solution.clock[("hafif-1", "s1")]
+    assert [item[0] for item in clock[1:6]] == ["o_J1", "(I1,1)", "(J1,1,1)", "(I2,1)", "(J1,1,2)"]
+    assert [item[1] for item in clock[1:6]] == pytest.approx([0.0, 0.5, 1.0, 1.5, 2.0])
+    assert [item[2] for item in clock[1:5]] == pytest.approx([0.0, 0.5, 1.0, 1.5])
     assert solution.entries[("hafif-1", "I1", "s1")] == 1
     assert solution.entries[("hafif-1", "I2", "s1")] == 1
 
@@ -253,13 +289,21 @@ def test_reentry_ban_4_23_blocks_a_second_entry():
     assert not chain_violations(instance, banned)
     assert banned.objective == pytest.approx(4.0)
     assert banned.entries[("hafif-1", "I1", "s1")] == 1
-    assert banned.chains[("hafif-1", "s1")] == ["σ", "o_J1", "(I1,1)", "(I1,2)", "ω"]
+    assert banned.chains[("hafif-1", "s1")] == ["σ", "o_J1", "(I1,1)", "(J1,1,1)", "ω"]
 
     opened = _solve(instance, periods=2, reentry_ban=False)
     assert opened.status == "Optimal"
     assert not chain_violations(instance, opened)
     assert opened.objective == pytest.approx(0.0)
     assert opened.entries[("hafif-1", "I1", "s1")] == 2
+    assert opened.chains[("hafif-1", "s1")] == [
+        "σ",
+        "o_J1",
+        "(I1,1)",
+        "(J1,1,2)",
+        "(I1,2)",
+        "ω",
+    ]
     assert opened.objective < banned.objective
 
 
@@ -276,14 +320,14 @@ def test_unused_team_takes_sigma_omega_and_start_matches_v():
     assert not chain_violations(instance, solution)
     assert solution.objective == pytest.approx(0.0)
     assert solution.V[("J1", "hafif")] == 1
-    assert solution.chains[("hafif-1", "s1")] == ["σ", "o_J1", "(I1,1)", "ω"]
-    assert solution.chains[("hafif-2", "s1")] == ["σ", "ω"]
+    assert solution.chains[("hafif-1", "s1")] == ["σ", "ω"]
+    assert solution.chains[("hafif-2", "s1")] == ["σ", "o_J1", "(I1,1)", "(J1,1,1)", "ω"]
 
 
 def test_closed_horizon_and_incompetent_teams_do_not_travel():
     blocked = section_5_3()
     blocked.N_max = 0
-    solution = _solve(blocked)
+    solution = _solve(blocked, periods=1)
     assert solution.status == "Optimal"
     assert not chain_violations(blocked, solution)
     assert solution.objective == pytest.approx(40)
@@ -295,11 +339,12 @@ def test_closed_horizon_and_incompetent_teams_do_not_travel():
 
     blind = section_5_3()
     blind.a = {(site.i, spec.k): 0 for site in blind.sites for spec in blind.team_types}
-    blind_solution = _solve(blind)
+    blind_solution = _solve(blind, periods=1)
     assert blind_solution.status == "Optimal"
     assert not chain_violations(blind, blind_solution)
     assert blind_solution.objective == pytest.approx(40)
-    assert all(value == 0 for value in blind_solution.G.values())
+    assert all(value == 0 for value in blind_solution.entries.values())
     for team in blind_solution.teams:
         for scenario in blind.scenarios:
-            assert blind_solution.chains[(team.r, scenario.s)] == ["σ", "ω"]
+            chain = blind_solution.chains[(team.r, scenario.s)]
+            assert not any(node.startswith("(I") for node in chain)

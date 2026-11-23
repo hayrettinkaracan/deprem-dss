@@ -1,20 +1,22 @@
-"""Bireysel ekip zinciri. Rapor (4.18)–(4.23), Bölüm 4.3, 4.4, 4.6(iii), 4.7.
+"""Bireysel ekip zinciri ve periyot aşan yolculuk.
 
-Her ekip r ve senaryo s için σ'dan ω'ya tek zincir vardır. Tahsis edilmeyen
-ekip σ → ω seçer. (4.21) ve (4.22) başlangıç merkezini V_{j,k} ile ve
-senaryolar arasında ortak tutar. (4.23) aynı enkaza ikinci fiziksel girişi
-kapatır; (i, t) → (i, t+1) bu toplama girmez.
+Rapor (4.18)–(4.23), (4.1), (4.24)–(4.33), (4.36)–(4.39).
+T = {1, …, 36}, L = 2, H = L|T| varsayılan ufuktur. Küçük örnekler kendi |T|
+değerini geçebilir; H her zaman L|T|'dir.
 
-Yer tutucular (sonraki maddeler):
+β ve h çıkış periyoduna aittir. Seyahat sınırı aşabilir; ekip varışa kadar
+yoldadır ve aynı sürenin tamamı bir kez yazılır. Varış kaydı, varış saatinin
+düştüğü periyottur. ω^yol_j, H anına yetişmeyen dönüştür; (4.38) onu stoka
+eklemez.
 
-- Çözülen ufuk ``PLACEHOLDER_PERIODS`` = 1. Düğüm kurucusu genel |T| alır;
-  36 periyot, periyot aşan yol ve Bas/Bit madde 3 ve 4'tür.
-- İş, (4.23)'ün saydığı her giriş için p_k · L saattir. Devam yayı ek iş
-  yazmaz. q = p(Bit − Bas) madde 4, Z1 (4.2) madde 5'tir.
-- Amaç hâlâ Σ_s P_s Σ_i u_{i,s} ve u, madde 1'deki gibi işten türetilir.
-- Çevrimleri süre kısıtı (4.29)–(4.30) kesecektir. Burada A_s, enkaz
-  sırasına göre yönlenir; graf çevrimsizdir ve ayrıca potansiyel yazılmaz.
-- a_{i,k} = 0 ise o ekip o enkaza giremez. (4.45)'in X biçimi madde 10'dadır.
+Geçici yer tutucular (rapor denklemi değildir):
+
+- İş hâlâ (4.23)'ün saydığı her fiziksel giriş için p·L saattir. (4.34) ve
+  (4.11)–(4.14) madde 4 ve 7'dedir; Bit−Bas henüz işe yazılmaz.
+- Amaç Σ_s P_s Σ_i u_{i,s}'dir. Z1'in Δ toplamı (4.2) madde 5, Z2 madde 6'dır.
+- CBC'ye verilen başlangıç turu model amacı değildir. Eşit talep içinde madde 1'deki
+  merkez sırasını seçer; çözücü daha iyi bir tur bulursa onu kullanır.
+- a_{i,k}=0 o ekibin yayını kapatır. (4.45) madde 10, yeniden planlama madde 9'dadır.
 """
 
 from __future__ import annotations
@@ -24,17 +26,23 @@ from dataclasses import dataclass, field
 import pulp
 
 from model.instance import Instance, competency, validate
-from model.network import Arc, Network, build_network, is_site_entry
-
-PLACEHOLDER_PERIODS = 1
-PRIMARY_LOCK_TOL = 1e-4
+from model.seed import apply_seed, build_seed
+from model.network import (
+    REPORT_PERIODS,
+    Arc,
+    Network,
+    build_network,
+    is_site_entry,
+    route_h,
+    time_window,
+)
 
 CHAIN_CAPTION = (
-    "Rapor (4.18)–(4.23): her ekip σ'dan ω'ya tek zincir izler. "
-    "Başlangıç merkezi V_{j,k} ile ortaktır; σ → ω tahsis edilmeyen ekiptir. "
-    f"Yer tutucu ufuk {PLACEHOLDER_PERIODS} periyottur. Her fiziksel enkaz girişi "
-    "L saat iş sayılır; devam yayı ikinci giriş değildir. "
-    "Bas/Bit, 36 periyot ve q sonraki maddelerdir. Bu zincir Supabase kaydını değiştirmez."
+    "Rapor T={1..36}, L=2, H=L|T|. Her ekip σ'dan ω'ya tek zincir izler (4.18)–(4.23). "
+    "β ve h çıkış periyoduna aittir; yolculuk sınır aşabilir, süre bir sonraki periyoda "
+    "yeniden yazılmaz. Ekip varışa kadar yoldadır. ω^yol ufuk sonuna yetişmeyen dönüştür "
+    "ve merkez stokuna girmez. İş yer tutucusu hâlâ giriş başına L saattir; "
+    "q=p(Bit−Bas) sonraki maddedir. Bu zincir Supabase kaydını değiştirmez."
 )
 
 
@@ -45,6 +53,23 @@ class Team:
     r: str
     k: str
     ordinal: int
+
+
+@dataclass(frozen=True)
+class Crossing:
+    """Periyot sınırı aşan veya ufuk sonunda yolda kalan bir yolculuk."""
+
+    team: str
+    scenario: str
+    origin: str
+    dest: str
+    depart_h: float
+    arrive_h: float
+    sey: float
+    departure_period: int
+    arrival_period: int | None
+    beta: float
+    horizon: bool
 
 
 @dataclass
@@ -59,12 +84,20 @@ class TeamChainSolution:
     VW: dict[str, int]
     unmet: dict[tuple[str, str], float]
     periods: int
+    horizon: float
     reentry_ban: bool
     reference_scenario: str
     teams: list[Team]
     chains: dict[tuple[str, str], list[str]]
     arcs: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
     entries: dict[tuple[str, str, str], int] = field(default_factory=dict)
+    bas: dict[tuple[str, str, str], float] = field(default_factory=dict)
+    bit: dict[tuple[str, str, str], float] = field(default_factory=dict)
+    clock: dict[tuple[str, str], list[tuple[str, float | None, float | None]]] = field(
+        default_factory=dict
+    )
+    crossings: list[Crossing] = field(default_factory=list)
+    inventory: dict[tuple[str, str, int, str], int] = field(default_factory=dict)
 
 
 def roster(instance: Instance) -> list[Team]:
@@ -80,7 +113,7 @@ def roster(instance: Instance) -> list[Team]:
 
 
 def default_solver(time_limit: int | None = None) -> pulp.LpSolver:
-    kwargs: dict = {"msg": False, "gapRel": 0, "threads": 1}
+    kwargs: dict = {"msg": False, "gapRel": 0, "threads": 1, "warmStart": True}
     if time_limit is not None:
         kwargs["timeLimit"] = time_limit
     return pulp.PULP_CBC_CMD(**kwargs)
@@ -93,25 +126,13 @@ def solve_team_chains(
     reentry_ban: bool = True,
     time_limit: int | None = None,
 ) -> TeamChainSolution:
-    """Zincirli modeli çözer. periods verilmezse yer tutucu ufuk kullanılır."""
+    """Zincirli modeli çözer. periods verilmezse rapor ufku |T|=36 kullanılır."""
 
     validate(instance)
-    periods = PLACEHOLDER_PERIODS if periods is None else periods
+    periods = REPORT_PERIODS if periods is None else periods
     network = build_network(instance, periods)
     solver = solver or default_solver(time_limit)
-    primary = _optimize(instance, network, solver, primary_cap=None, reentry_ban=reentry_ban)
-    if primary.status != "Optimal":
-        return primary
-    refined = _optimize(
-        instance,
-        network,
-        solver,
-        primary_cap=primary.objective,
-        reentry_ban=reentry_ban,
-    )
-    if refined.status != "Optimal" or refined.objective > primary.objective + 1e-3:
-        return primary
-    return refined
+    return _optimize(instance, network, solver, reentry_ban=reentry_ban)
 
 
 def constraint_names(
@@ -119,8 +140,8 @@ def constraint_names(
     periods: int | None = None,
     reentry_ban: bool = True,
 ) -> set[str]:
-    periods = PLACEHOLDER_PERIODS if periods is None else periods
-    problem, _bundle, _primary, _secondary = _build(
+    periods = REPORT_PERIODS if periods is None else periods
+    problem, _bundle, _primary = _build(
         instance, build_network(instance, periods), reentry_ban=reentry_ban
     )
     return set(problem.constraints)
@@ -129,8 +150,8 @@ def constraint_names(
 def format_routing(instance: Instance, solution: TeamChainSolution) -> str:
     lines = [
         f"Durum: {solution.status}",
-        f"Amaç: {solution.objective:.4f}  (beklenen karşılanmayan talep, yer tutucu iş)",
-        f"Periyot yer tutucusu: {solution.periods}",
+        f"Amaç: {solution.objective:.4f}  (beklenen karşılanmayan talep, giriş başına L saat)",
+        f"Ufuk: |T|={solution.periods}, L={instance.L:g}, H={solution.horizon:g}",
         "Merkezler:",
     ]
     for center in instance.centers:
@@ -141,12 +162,20 @@ def format_routing(instance: Instance, solution: TeamChainSolution) -> str:
             f"  {center.j}: G={solution.G[center.j]}  V[{teams}]  "
             f"VU={solution.VU[center.j]}  VW={solution.VW[center.j]}"
         )
-    lines.append("Zincirler:")
+    lines.append("Zincirler ve saatler:")
     for scenario in instance.scenarios:
         lines.append(f"  {scenario.s} {scenario.name}:")
         for team in solution.teams:
-            chain = " → ".join(solution.chains.get((team.r, scenario.s), []))
-            lines.append(f"    {team.r}: {chain}")
+            lines.append(f"    {team.r}: {clock_text(solution.clock.get((team.r, scenario.s), []))}")
+    if solution.crossings:
+        lines.append("Sınır aşan yolculuklar:")
+        for trip in solution.crossings:
+            dest = "ufuk sonrası" if trip.horizon else f"periyot {trip.arrival_period}"
+            lines.append(
+                f"  {trip.scenario} {trip.team}: {trip.origin} → {trip.dest}  "
+                f"kalkış {trip.depart_h:.2f} (t={trip.departure_period}, β={trip.beta:g})  "
+                f"Sey={trip.sey:.2f}  varış kaydı {trip.arrive_h:.2f} ({dest})"
+            )
     lines.append("Senaryo karşılanmayan talep:")
     for scenario in instance.scenarios:
         bits = ", ".join(
@@ -155,6 +184,16 @@ def format_routing(instance: Instance, solution: TeamChainSolution) -> str:
         total = sum(solution.unmet[(site.i, scenario.s)] for site in instance.sites)
         lines.append(f"  {scenario.name} P={scenario.P}: {total:.4f}  ({bits})")
     return "\n".join(lines)
+
+
+def clock_text(clock: list[tuple[str, float | None, float | None]]) -> str:
+    parts = []
+    for label, bas, bit in clock:
+        if bas is None or bit is None:
+            parts.append(label)
+        else:
+            parts.append(f"{label} [{bas:.2f}–{bit:.2f}]")
+    return " → ".join(parts)
 
 
 def chain_rows(instance: Instance, solution: TeamChainSolution) -> list[dict[str, str]]:
@@ -168,6 +207,7 @@ def chain_rows(instance: Instance, solution: TeamChainSolution) -> list[dict[str
                     "Ekip": team.r,
                     "Tür": team.k,
                     "Zincir": " → ".join(solution.chains.get((team.r, scenario.s), [])),
+                    "Zaman": clock_text(solution.clock.get((team.r, scenario.s), [])),
                 }
             )
     return rows
@@ -177,15 +217,13 @@ def _optimize(
     instance: Instance,
     network: Network,
     solver: pulp.LpSolver,
-    primary_cap: float | None,
     reentry_ban: bool,
 ) -> TeamChainSolution:
-    problem, bundle, primary, secondary = _build(instance, network, reentry_ban=reentry_ban)
-    if primary_cap is None:
-        problem.setObjective(primary)
-    else:
-        problem += primary <= primary_cap + PRIMARY_LOCK_TOL, "primary_lock"
-        problem.setObjective(secondary)
+    problem, bundle, primary = _build(instance, network, reentry_ban=reentry_ban)
+    apply_seed(problem, bundle, build_seed(instance, network), instance, network)
+    if getattr(solver, "optionsDict", None) is not None:
+        solver.optionsDict["warmStart"] = True
+    problem.setObjective(primary)
     status_code = problem.solve(solver)
     status = pulp.LpStatus.get(status_code, str(status_code))
     return _extract(instance, network, bundle, status, reentry_ban)
@@ -198,11 +236,6 @@ def _build(instance: Instance, network: Network, reentry_ban: bool):
     scenarios = instance.scenarios
     teams = roster(instance)
     teams_of = {spec.k: [team for team in teams if team.k == spec.k] for spec in types}
-    j_index = {center.j: index for index, center in enumerate(centers)}
-    k_index = {spec.k: index for index, spec in enumerate(types)}
-    type_count = max(len(types), 1)
-    site_rank = {site.i: index + 1 for index, site in enumerate(sites)}
-    center_rank = {center.j: index + 1 for index, center in enumerate(centers)}
     p_of = {spec.k: spec.p for spec in types}
     reference = scenarios[0].s if scenarios else ""
 
@@ -223,6 +256,7 @@ def _build(instance: Instance, network: Network, reentry_ban: bool):
                     f"Y_{team.r}_{arc.u.key}_{arc.v.key}_{scenario.s}",
                     cat="Binary",
                 )
+    bas, bit = _time_variables(network, teams, scenarios)
 
     _add_first_stage(problem, instance, G, V, VU, VW)
     _add_competency_blocks(problem, instance, network, teams, Y)
@@ -237,6 +271,8 @@ def _build(instance: Instance, network: Network, reentry_ban: bool):
         reference,
         reentry_ban,
     )
+    _add_timing(problem, instance, network, teams, scenarios, Y, bas, bit)
+    flow = _add_inventory(problem, instance, network, teams_of, Y, V)
 
     unmet = {
         (site.i, scenario.s): pulp.LpVariable(
@@ -270,24 +306,6 @@ def _build(instance: Instance, network: Network, reentry_ban: bool):
         scenario.P * unmet[(site.i, scenario.s)] for scenario in scenarios for site in sites
     ]
     primary = pulp.lpSum(primary_terms) if primary_terms else 0
-
-    secondary_terms = [G[center.j] * (j_index[center.j] + 1) for center in centers]
-    secondary_terms += [
-        V[(center.j, spec.k)] * (8 ** (j_index[center.j] * type_count + k_index[spec.k]))
-        for center in centers
-        for spec in types
-    ]
-    secondary_terms += [(VU[center.j] + VW[center.j]) * (j_index[center.j] + 1) for center in centers]
-    for team in teams:
-        for scenario in scenarios:
-            for arc in network.arcs[scenario.s]:
-                penalty = _arc_penalty(arc, team, site_rank, center_rank, len(sites))
-                if penalty:
-                    secondary_terms.append(
-                        penalty * Y[(team.r, arc.u.key, arc.v.key, scenario.s)]
-                    )
-    secondary_terms += [unmet[key] * 1e-6 for key in unmet]
-    secondary = pulp.lpSum(secondary_terms) if secondary_terms else 0
     bundle = {
         "G": G,
         "V": V,
@@ -295,10 +313,33 @@ def _build(instance: Instance, network: Network, reentry_ban: bool):
         "VW": VW,
         "Y": Y,
         "u": unmet,
+        "bas": bas,
+        "bit": bit,
+        "I": flow,
         "teams": teams,
         "reference": reference,
     }
-    return problem, bundle, primary, secondary
+    return problem, bundle, primary
+
+
+def _time_variables(network: Network, teams: list[Team], scenarios):
+    upper = network.horizon
+    bas: dict[tuple[str, str, str], pulp.LpVariable] = {}
+    bit: dict[tuple[str, str, str], pulp.LpVariable] = {}
+    for scenario in scenarios:
+        for team in teams:
+            for visit in network.visits:
+                bas[(team.r, visit.key, scenario.s)] = pulp.LpVariable(
+                    f"Bas_{team.r}_{visit.key}_{scenario.s}",
+                    lowBound=0,
+                    upBound=upper,
+                )
+                bit[(team.r, visit.key, scenario.s)] = pulp.LpVariable(
+                    f"Bit_{team.r}_{visit.key}_{scenario.s}",
+                    lowBound=0,
+                    upBound=upper,
+                )
+    return bas, bit
 
 
 def _add_first_stage(problem, instance: Instance, G, V, VU, VW) -> None:
@@ -339,7 +380,7 @@ def _add_competency_blocks(problem, instance: Instance, network: Network, teams:
                         continue
                     problem += (
                         Y[(team.r, arc.u.key, arc.v.key, scenario.s)] == 0,
-                        f"link_a_{team.r}_{site.i}_{scenario.s}_{arc.u.key}",
+                        f"link_a_{team.r}_{site.i}_{scenario.s}_{arc.u.key}_{arc.v.key}",
                     )
 
 
@@ -427,38 +468,189 @@ def _add_chain_equations(
                     )
 
 
-def _arc_penalty(
-    arc: Arc,
-    team: Team,
-    site_rank: dict[str, int],
-    center_rank: dict[str, int],
-    site_count: int,
-) -> float:
-    """Aynı karşılanmayan talep içinden tek zincir seçer. Rapor amacı değildir.
+def _add_timing(problem, instance: Instance, network: Network, teams, scenarios, Y, bas, bit) -> None:
+    """Varış periyodu ve yolda meşguliyet. (4.24), (4.25), (4.28)–(4.33).
 
-    Katsayılar V ağırlığının (8'in kuvvetleri) altında kalır; ön konumlandırmayı
-    değiştirmez. Küçük enkaz indisi önce ziyaret edilir, dönüş en küçük ℓ'ye gider.
+    (4.24) ve (4.29)–(4.30) saati periyot kaydına bağlar ve pozitif seyirli
+    çevrimi bozar. İş üretimi (4.34) burada kurulmaz. M = H+L.
     """
 
-    if arc.kind == "start" and arc.v.kind == "origin":
-        return team.ordinal * center_rank[arc.v.j] * 1e-4
-    if arc.kind == "travel" and arc.v.kind == "debris":
-        rank = site_rank[arc.v.i]
-        team_cost = team.ordinal * 1e-4
-        if arc.u.kind == "origin":
-            return rank * 1e-3 + team_cost
-        ell = arc.u.ell if arc.u.kind == "center" else 1
-        breadth = site_count + 1
-        return 1e-2 + rank * 1e-4 + ell * (breadth - rank) * 1e-4 + team_cost
-    if arc.kind == "travel" and arc.v.kind == "center":
-        return arc.v.ell * 1e-4
-    if arc.kind == "continue":
-        return 1e-5
-    if arc.kind == "wait":
-        return 1e-4
-    if arc.kind in {"enroute", "enroute_end"}:
-        return 1e-2
-    return 0.0
+    length = instance.L
+    horizon = network.horizon
+    report_m = network.big_m
+    into: dict[str, dict[str, list[Arc]]] = {}
+    for scenario in scenarios:
+        bucket: dict[str, list[Arc]] = {}
+        for arc in network.arcs[scenario.s]:
+            bucket.setdefault(arc.v.key, []).append(arc)
+        into[scenario.s] = bucket
+
+    for scenario in scenarios:
+        arcs = network.arcs[scenario.s]
+        scenario_into = into[scenario.s]
+        for team in teams:
+            for visit in network.visits:
+                key = (team.r, visit.key, scenario.s)
+                yin_arcs = scenario_into.get(visit.key, [])
+                yin = pulp.lpSum(
+                    Y[(team.r, arc.u.key, arc.v.key, scenario.s)] for arc in yin_arcs
+                )
+                if visit.kind in {"debris", "center"}:
+                    lo, hi = time_window(visit, length)
+                    problem += bas[key] >= lo * yin, f"eq_4_24_lo_{team.r}_{visit.key}_{scenario.s}"
+                    problem += bas[key] <= bit[key], f"eq_4_24_span_{team.r}_{visit.key}_{scenario.s}"
+                    problem += bit[key] <= hi * yin, f"eq_4_24_hi_{team.r}_{visit.key}_{scenario.s}"
+                elif visit.kind == "origin":
+                    problem += bas[key] == 0, f"eq_4_25_bas_{team.r}_{visit.j}_{scenario.s}"
+                    opened = Y.get((team.r, network.sigma.key, visit.key, scenario.s))
+                    if opened is not None:
+                        problem += (
+                            bit[key] <= length * opened,
+                            f"eq_4_25_bit_{team.r}_{visit.j}_{scenario.s}",
+                        )
+                elif visit.kind == "enroute":
+                    problem += (
+                        bas[key] == horizon * yin,
+                        f"eq_4_32_bas_{team.r}_{visit.j}_{scenario.s}",
+                    )
+                    problem += (
+                        bit[key] == horizon * yin,
+                        f"eq_4_32_bit_{team.r}_{visit.j}_{scenario.s}",
+                    )
+
+            for arc in arcs:
+                y = Y[(team.r, arc.u.key, arc.v.key, scenario.s)]
+                if arc.kind in {"travel", "enroute"}:
+                    problem += (
+                        y <= route_h(
+                            instance,
+                            arc.u.physical() or "",
+                            arc.v.j if arc.kind == "enroute" else (arc.v.physical() or ""),
+                            arc.departure_t or 1,
+                            scenario,
+                        ),
+                        f"eq_4_28_{team.r}_{arc.u.key}_{arc.v.key}_{scenario.s}",
+                    )
+                if not arc.tam:
+                    if arc.kind == "enroute":
+                        problem += (
+                            bit[(team.r, arc.u.key, scenario.s)] + arc.sey
+                            >= horizon - report_m * (1 - y),
+                            f"eq_4_33_{team.r}_{arc.u.key}_{arc.v.j}_{scenario.s}",
+                        )
+                    continue
+                if time_window(arc.u, length) is None or time_window(arc.v, length) is None:
+                    continue
+                tail = (team.r, arc.u.key, scenario.s)
+                head = (team.r, arc.v.key, scenario.s)
+                problem += (
+                    bas[head] >= bit[tail] + arc.sey - report_m * (1 - y),
+                    f"eq_4_29_{team.r}_{arc.u.key}_{arc.v.key}_{scenario.s}",
+                )
+                problem += (
+                    bas[head] <= bit[tail] + arc.sey + report_m * (1 - y),
+                    f"eq_4_30_{team.r}_{arc.u.key}_{arc.v.key}_{scenario.s}",
+                )
+
+            for site in instance.sites:
+                last = f"d_{site.i}_t{network.periods}"
+                end = (team.r, last, network.omega.key, scenario.s)
+                if end not in Y or (team.r, last, scenario.s) not in bit:
+                    continue
+                problem += (
+                    bit[(team.r, last, scenario.s)] >= horizon * Y[end],
+                    f"eq_4_31_{team.r}_{site.i}_{scenario.s}",
+                )
+
+
+def _add_inventory(problem, instance: Instance, network: Network, teams_of, Y, V):
+    """(4.36)–(4.39). Varıştan önce ve ω^yol ile biten dönüş stoka yazılmaz."""
+
+    flow: dict[tuple[str, str, int, str], pulp.LpVariable] = {}
+    f_vars: dict[tuple[str, str, str, int, str], pulp.LpVariable] = {}
+    centers = [center.j for center in instance.centers]
+    sites = [site.i for site in instance.sites]
+    for scenario in instance.scenarios:
+        har = network.har[scenario.s]
+        for (n, n2, t_dep), arc_list in har.items():
+            for spec in instance.team_types:
+                f_var = pulp.LpVariable(
+                    f"f_{spec.k}_{n}_{n2}_t{t_dep}_{scenario.s}",
+                    lowBound=0,
+                    cat="Integer",
+                )
+                f_vars[(n, n2, spec.k, t_dep, scenario.s)] = f_var
+                problem += (
+                    f_var
+                    == pulp.lpSum(
+                        Y[(team.r, arc.u.key, arc.v.key, scenario.s)]
+                        for arc in arc_list
+                        for team in teams_of[spec.k]
+                    ),
+                    f"eq_4_36_{spec.k}_{n}_{n2}_{t_dep}_{scenario.s}",
+                )
+                problem += (
+                    f_var <= network.big_m,
+                    f"eq_4_27_{spec.k}_{n}_{n2}_{t_dep}_{scenario.s}",
+                )
+        for left in centers:
+            for right in centers:
+                if left == right:
+                    continue
+                for spec in instance.team_types:
+                    for t_dep in range(1, network.periods + 1):
+                        closed = pulp.LpVariable(
+                            f"f_{spec.k}_{left}_{right}_t{t_dep}_{scenario.s}",
+                            lowBound=0,
+                            upBound=0,
+                            cat="Integer",
+                        )
+                        problem += (
+                            closed == 0,
+                            f"eq_4_37_{left}_{right}_{spec.k}_{t_dep}_{scenario.s}",
+                        )
+                        problem += (
+                            closed <= 0,
+                            f"eq_4_27_{spec.k}_{left}_{right}_{t_dep}_{scenario.s}",
+                        )
+
+        for center in instance.centers:
+            for spec in instance.team_types:
+                flow[(center.j, spec.k, 0, scenario.s)] = pulp.LpVariable(
+                    f"I_{spec.k}_{center.j}_t0_{scenario.s}",
+                    lowBound=0,
+                    cat="Integer",
+                )
+                problem += (
+                    flow[(center.j, spec.k, 0, scenario.s)] == V[(center.j, spec.k)],
+                    f"eq_4_39_{center.j}_{spec.k}_{scenario.s}",
+                )
+                for t_now in range(1, network.periods + 1):
+                    flow[(center.j, spec.k, t_now, scenario.s)] = pulp.LpVariable(
+                        f"I_{spec.k}_{center.j}_t{t_now}_{scenario.s}",
+                        lowBound=0,
+                        cat="Integer",
+                    )
+                    arrived = [
+                        Y[(team.r, arc.u.key, arc.v.key, scenario.s)]
+                        for ell in range(1, t_now + 1)
+                        for arc in network.arrivals[scenario.s].get((center.j, ell), [])
+                        for team in teams_of[spec.k]
+                    ]
+                    left = [
+                        f_vars[(center.j, site_i, spec.k, ell, scenario.s)]
+                        for site_i in sites
+                        for ell in range(1, t_now + 1)
+                        if (center.j, site_i, spec.k, ell, scenario.s) in f_vars
+                    ]
+                    problem += (
+                        flow[(center.j, spec.k, t_now, scenario.s)]
+                        == V[(center.j, spec.k)]
+                        + (pulp.lpSum(arrived) if arrived else 0)
+                        - (pulp.lpSum(left) if left else 0),
+                        f"eq_4_38_{center.j}_{spec.k}_{t_now}_{scenario.s}",
+                    )
+    return flow
 
 
 def _extract(
@@ -473,6 +665,9 @@ def _extract(
     V = {key: _as_int(var) for key, var in bundle["V"].items()}
     VU = {j: _as_int(var) for j, var in bundle["VU"].items()}
     VW = {j: _as_int(var) for j, var in bundle["VW"].items()}
+    bas = {key: _as_float(var) for key, var in bundle["bas"].items()}
+    bit = {key: _as_float(var) for key, var in bundle["bit"].items()}
+    inventory = {key: _as_int(var) for key, var in bundle["I"].items()}
     chosen: dict[tuple[str, str], list[tuple[str, str]]] = {}
     entries = {
         (team.r, site.i, scenario.s): 0
@@ -490,14 +685,30 @@ def _extract(
                 entries[(team_r, site.i, scenario_s)] += 1
 
     chains: dict[tuple[str, str], list[str]] = {}
+    clock: dict[tuple[str, str], list[tuple[str, float | None, float | None]]] = {}
+    crossings: list[Crossing] = []
+    scenario_of = {scenario.s: scenario for scenario in instance.scenarios}
     for scenario in instance.scenarios:
         for team in teams:
             pairs = chosen.get((team.r, scenario.s), [])
             keys = _trace(pairs)
             if keys is None:
                 chains[(team.r, scenario.s)] = []
+                clock[(team.r, scenario.s)] = []
             else:
                 chains[(team.r, scenario.s)] = [network.by_key[key].label for key in keys]
+                row, trips = _clock_and_crossings(
+                    instance,
+                    network,
+                    scenario_of[scenario.s],
+                    team.r,
+                    keys,
+                    pairs,
+                    bas,
+                    bit,
+                )
+                clock[(team.r, scenario.s)] = row
+                crossings.extend(trips)
             chosen.setdefault((team.r, scenario.s), [])
 
     unmet = _tight_unmet(instance, teams, entries)
@@ -522,13 +733,83 @@ def _extract(
         VW=VW,
         unmet=unmet,
         periods=network.periods,
+        horizon=network.horizon,
         reentry_ban=reentry_ban,
         reference_scenario=bundle["reference"],
         teams=teams,
         chains=chains,
         arcs=chosen,
         entries=entries,
+        bas=bas,
+        bit=bit,
+        clock=clock,
+        crossings=crossings,
+        inventory=inventory,
     )
+
+
+def _clock_and_crossings(instance, network, scenario, team_r, keys, pairs, bas, bit):
+    arc_of = {
+        (tail, head): network.by_arc[scenario.s][(tail, head)]
+        for tail, head in pairs
+    }
+    clock = []
+    crossings = []
+    for index, key in enumerate(keys):
+        visit = network.by_key[key]
+        if visit.kind in {"sigma", "omega"}:
+            clock.append((visit.label, None, None))
+        else:
+            clock.append(
+                (
+                    visit.label,
+                    bas[(team_r, key, scenario.s)],
+                    bit[(team_r, key, scenario.s)],
+                )
+            )
+        if index == 0:
+            continue
+        arc = arc_of.get((keys[index - 1], key))
+        if arc is None or arc.kind not in {"travel", "enroute"}:
+            continue
+        depart = bit[(team_r, arc.u.key, scenario.s)]
+        if arc.kind == "enroute":
+            arrive = network.horizon
+            arrival_period = None
+            horizon = True
+            dest = visit.label
+        else:
+            arrive = bas[(team_r, arc.v.key, scenario.s)]
+            arrival_period = arc.v.period()
+            horizon = False
+            dest = visit.label
+        if horizon or arc.crosses:
+            beta = _beta_used(instance, scenario, arc)
+            crossings.append(
+                Crossing(
+                    team=team_r,
+                    scenario=scenario.s,
+                    origin=arc.u.label,
+                    dest=dest,
+                    depart_h=depart,
+                    arrive_h=arrive,
+                    sey=arc.sey,
+                    departure_period=arc.departure_t or 0,
+                    arrival_period=arrival_period,
+                    beta=beta,
+                    horizon=horizon,
+                )
+            )
+    return clock, crossings
+
+
+def _beta_used(instance: Instance, scenario, arc: Arc) -> float:
+    from model.network import beta_at
+
+    tail = arc.u.physical() or ""
+    head = arc.v.j if arc.kind == "enroute" else (arc.v.physical() or "")
+    beta = beta_at(instance, scenario, tail, head, arc.departure_t or 1)
+    return 0.0 if beta is None else beta
 
 
 def _tight_unmet(
