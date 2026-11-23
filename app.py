@@ -50,36 +50,52 @@ if rol == "Admin":
         df = pd.DataFrame(response.data)
         st.dataframe(df)
         
-        if st.button("Avcılar Gerçek Verisinden Ölçekli Enkaz Üret"):
-            st.info("""
-            **Orijinal Veri (İBB-KRDAE 2020):**
-            - Nüfus: ~448.000
-            - Bina: 26.762
-            - Orta+ hasar: ~7.039 bina (%27)
-            - Geçici barınma: 34.941 hane (~105.000 kişi)
-            
-            **Normalizasyon:** Küçük ölçekli model için 10 enkaz noktasına bölündü.
-            Toplam talep ≈ 10.500 kişi (orijinalin ~1/10’u).
-            """)
-            # Eski Avcılar kayıtlarını sil
-            supabase.table("enkazlar").delete().like("isim", "Avcılar-%").execute()
-            supabase.table("enkazlar").delete().like("isim", "Enkaz-%").execute()
-            
-            mahalleler = ["Cihangir", "Yeşilkent", "Üniversite", "Tahtakale", "Gümüşpala", 
-                          "Firuzköy", "Denizköşkler", "Merkez", "Ambarlı", "Mustafa Kemal"]
-            for mah in mahalleler:
-                talep = random.uniform(600, 1400)
-                makine = 1 if random.random() < 0.35 else 0
-                supabase.table("enkazlar").insert({
-                    "isim": f"Avcılar-{mah}",
-                    "enlem": 40.98 + random.uniform(-0.05, 0.05),
-                    "boylam": 28.72 + random.uniform(-0.05, 0.05),
-                    "talep": talep,
-                    "makine_gerekli": makine,
-                    "durum": "aktif"
-                }).execute()
-            st.success("Avcılar ölçekli 10 enkaz noktası eklendi")
-            st.rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Avcılar Temizle ve Üret"):
+                st.info("""
+                **Orijinal Veri (İBB-KRDAE 2020):**
+                - Nüfus: ~448.000
+                - Bina: 26.762
+                - Orta+ hasar: ~7.039 bina (%27)
+                - Geçici barınma: 34.941 hane (~105.000 kişi)
+                
+                **Normalizasyon:** Küçük ölçekli model için 10 enkaz noktasına bölündü.
+                """)
+                supabase.table("enkazlar").delete().like("isim", "Avcılar-%").execute()
+                mahalleler = ["Cihangir", "Yeşilkent", "Üniversite", "Tahtakale", "Gümüşpala", 
+                              "Firuzköy", "Denizköşkler", "Merkez", "Ambarlı", "Mustafa Kemal"]
+                for mah in mahalleler:
+                    talep = random.uniform(600, 1400)
+                    makine = 1 if random.random() < 0.35 else 0
+                    supabase.table("enkazlar").insert({
+                        "isim": f"Avcılar-{mah}",
+                        "enlem": 40.98 + random.uniform(-0.05, 0.05),
+                        "boylam": 28.72 + random.uniform(-0.05, 0.05),
+                        "talep": talep,
+                        "makine_gerekli": makine,
+                        "durum": "aktif"
+                    }).execute()
+                st.success("Eski Avcılar kayıtları silindi, yenileri eklendi")
+                st.rerun()
+        
+        with col2:
+            if st.button("Avcılar Üzerine Ekle"):
+                mahalleler = ["Cihangir", "Yeşilkent", "Üniversite", "Tahtakale", "Gümüşpala", 
+                              "Firuzköy", "Denizköşkler", "Merkez", "Ambarlı", "Mustafa Kemal"]
+                for mah in mahalleler:
+                    talep = random.uniform(600, 1400)
+                    makine = 1 if random.random() < 0.35 else 0
+                    supabase.table("enkazlar").insert({
+                        "isim": f"Avcılar-{mah}-{random.randint(10,99)}",
+                        "enlem": 40.98 + random.uniform(-0.05, 0.05),
+                        "boylam": 28.72 + random.uniform(-0.05, 0.05),
+                        "talep": talep,
+                        "makine_gerekli": makine,
+                        "durum": "aktif"
+                    }).execute()
+                st.success("Yeni Avcılar enkazları eklendi (eskiler duruyor)")
+                st.rerun()
     
     with tab2:
         st.subheader("Ekip Ekle")
