@@ -32,12 +32,28 @@ def frame_with(at, column):
 
 
 class SmokeTests(unittest.TestCase):
+    def setUp(self):
+        os.environ["DEPREM_DEMO"] = "1"
+
+    def tearDown(self):
+        os.environ.pop("DEPREM_DEMO", None)
+
     def app(self):
         return AppTest.from_file(APP, default_timeout=30).run()
+
+    def test_anahtar_yoksa_uygulama_durur(self):
+        os.environ.pop("DEPREM_DEMO", None)
+        at = AppTest.from_file(APP, default_timeout=30).run()
+        assert_clean(self, at)
+        metin = "\n".join(alerts(at))
+        self.assertIn("Supabase anahtarları bulunamadı", metin)
+        self.assertIn("DEPREM_DEMO=1", metin)
+        self.assertFalse(any(el.value == "Admin Paneli" for el in at.header))
 
     def test_admin_sayfalari(self):
         at = self.app()
         assert_clean(self, at)
+        self.assertTrue(any("kaydedilmez" in m for m in alerts(at)))
         self.assertTrue(any(el.value == "Admin Paneli" for el in at.header))
         self.assertTrue(any("İBB-KRDAE" in el.value for el in at.info))
         enkaz = frame_with(at, "Talep (kişi)")
@@ -68,13 +84,13 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("kişi", at.number_input(key="enkaz_talep").help.lower())
 
     def test_onbellek_ikinci_okumayi_atlar(self):
-        os.environ["DEPREM_CACHE_PROBE"] = "1"
-        try:
-            at = self.app()
-        finally:
-            os.environ.pop("DEPREM_CACHE_PROBE", None)
+        at = self.app()
         assert_clean(self, at)
-        self.assertEqual(at.session_state["onbellek_kanit"], (2, 0))
+        ilk = at.session_state["memory_db"].select_count
+        self.assertGreater(ilk, 0)
+        at.selectbox(key="senaryo").set_value("Baz").run()
+        assert_clean(self, at)
+        self.assertEqual(at.session_state["memory_db"].select_count, ilk)
 
     def test_bos_isim_ve_talep_hata_mesaji(self):
         at = self.app()

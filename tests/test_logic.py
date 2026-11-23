@@ -8,6 +8,10 @@ import app
 
 
 class ValidationTests(unittest.TestCase):
+    def test_demo_istemcisi_yalnizca_demo_dalinda(self):
+        govde = Path(app.__file__).read_text(encoding="utf-8").split("def main", 1)[0]
+        self.assertNotIn("demo_client", govde)
+
     def test_enkaz_isim_zorunlu(self):
         self.assertIn("Enkaz ismi zorunludur.", app.enkaz_hatalari("  ", 41, 28.9, 10))
 
@@ -26,8 +30,13 @@ class ValidationTests(unittest.TestCase):
 
 
 class MemoryClientTests(unittest.TestCase):
+    def _db(self):
+        from demo_client import MemorySupabase
+
+        return MemorySupabase()
+
     def test_batch_insert_tek_cagri(self):
-        db = app.MemorySupabase()
+        db = self._db()
         before = db.insert_calls
         rows = [
             {
@@ -46,7 +55,7 @@ class MemoryClientTests(unittest.TestCase):
         self.assertEqual(result.data[0]["id"] + 9, result.data[-1]["id"])
 
     def test_like_silme_digerlerini_birakir(self):
-        db = app.MemorySupabase()
+        db = self._db()
         db.table("enkazlar").insert(
             {
                 "isim": "Kadıköy-Ek",
@@ -64,7 +73,7 @@ class MemoryClientTests(unittest.TestCase):
         self.assertIn("Kadıköy-Ek", isimler)
 
     def test_join_ve_id_filtresi(self):
-        db = app.MemorySupabase()
+        db = self._db()
         devam = (
             db.table("atamalar")
             .select("*, ekipler(isim), enkazlar(isim, talep)")
@@ -81,14 +90,14 @@ class MemoryClientTests(unittest.TestCase):
         self.assertEqual(yalniz, [{"id": 2, "isim": "AK-1"}])
 
     def test_select_kopyadir(self):
-        db = app.MemorySupabase()
+        db = self._db()
         ilk = db.table("ekipler").select("*").execute().data
         ilk[0]["isim"] = "degisti"
         tekrar = db.table("ekipler").select("*").execute().data
         self.assertEqual(tekrar[0]["isim"], "AK-1")
 
     def test_upsert_yeni_satir(self):
-        db = app.MemorySupabase()
+        db = self._db()
         before = len(db.table("yardimci_kaynaklar").select("*").execute().data)
         db.table("yardimci_kaynaklar").upsert(
             {"enkaz_id": 4, "umke_sayisi": 9, "makine_sayisi": 0}
