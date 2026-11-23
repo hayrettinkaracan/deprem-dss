@@ -1,5 +1,5 @@
 streamlit
-# 2.9: PULP_CBC_CMD ve paketin içindeki CBC. PuLP 3+ bu adı kaldırdı.
+# 2.9: PULP_CBC_CMD ve LpVariable.dicts. PuLP 3+ bu adları kaldırdı.
 pulp==2.9.0
 pandas
 supabase
