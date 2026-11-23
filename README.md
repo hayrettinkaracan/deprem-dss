@@ -24,7 +24,8 @@ Bu mod `demo_client.py` içindeki bellek istemcisini kullanır. Sayfanın üstü
 Paket `model/` Streamlit ve Supabase import etmez.
 
 - 1/11: birinci aşama (4.4)–(4.10), `solve_first_stage`.
-- 2/11: bireysel ekip zinciri (4.18)–(4.23), `solve_team_chains`. Ziyaret düğümleri `(i, t)` ve `(j, t, ℓ)`. Çözülen ufuk yer tutucusu 1 periyottur.
+- 2/11: bireysel ekip zinciri (4.18)–(4.23), `solve_team_chains`.
+- 3/11: \(T=\{1..36\}\), \(L=2\), \(H=72\). Periyot aşan yol (4.1), (4.24)–(4.33), (4.36)–(4.39). İş hâlâ giriş başına \(L\) saattir.
 
 "Atama Çalıştır" her iki sonucu da gösterir. Supabase'e yazılan operasyonel atama seçilen tek senaryo için eskisi gibi kalır.
 

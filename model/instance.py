@@ -49,13 +49,18 @@ class Site:
 
 @dataclass(frozen=True)
 class Scenario:
-    """Senaryo s. P = P_s. beta[i], i'ye giden güzergâhların gecikme oranı."""
+    """Senaryo s. P = P_s. beta[i], i'ye giden güzergâhların gecikme oranı.
+
+    beta_t[(i, t)] verilirse o enkazın t çıkış periyodundaki β budur.
+    Boşsa β periyoda ayrılmaz; her t için beta[i] kullanılır.
+    """
 
     s: str
     name: str
     P: float
     D: dict[str, float]
     beta: dict[str, float]
+    beta_t: dict[tuple[str, int], float] | None = None
 
 
 @dataclass
@@ -171,6 +176,16 @@ def validate(instance: Instance) -> None:
                 raise ValueError(f"D_{{{site.i},{scenario.s}}} tanımlı olmalı")
             if site.i not in scenario.beta or scenario.beta[site.i] < 0:
                 raise ValueError(f"beta_{{{site.i},{scenario.s}}} tanımlı olmalı")
+        if scenario.beta_t:
+            for key, value in scenario.beta_t.items():
+                if (
+                    not isinstance(key, tuple)
+                    or len(key) != 2
+                    or not isinstance(key[1], int)
+                    or key[1] < 1
+                    or value < 0
+                ):
+                    raise ValueError(f"beta_t_{scenario.s} (i, t) ve negatif olmayan oran olmalı")
 
     if instance.a:
         for value in instance.a.values():
