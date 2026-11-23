@@ -1,89 +1,59 @@
-"""Supabase satırlarını birinci aşama örneğine çevirir.
+"""Supabase satırlarını rapor notasyonundaki örneğe çevirir.
 
-Canlı planda açma maliyetleri semboliktir. Veritabanındaki kişi talebi ile
-rapor maliyeti aynı ölçekte olmadığı için 0.01, bir ekibin sağlayacağı
-hizmetin altında kalır ve merkezi kapatmaya zorlamaz. Bütçe ve Nmax
-kısıtları modelde durur; 5.3 doğrulama seti asıl maliyetleri kullanır.
+Canlı veride τ tablosu yoktur. Mesafe 30 km/saat ile saate çevrilir; bu yalnızca
+önizlemedir. s2'deki I1/I5 ayrımı 5.3 tablosuna aittir, canlıda bütün güzergâhlara
+0,15 uygulanır. m_i = talep ve p_k = tip içi ortalama kapasite de önizleme
+varsayımıdır. Plan Supabase atamasını değiştirmez.
 """
 
 from __future__ import annotations
 
-import random
 import unicodedata
 
-from data.section_5_3 import PLANNING_CENTERS
-from model.instance import Center, Instance, Scenario, Site, TeamType
+from model.instance import Center, Instance, Scenario, Site, TeamType, haversine_km
 from model.problem import Solution
 
-LIVE_RADIUS_KM = 8.0
-LIVE_BUDGET = 1.0
+LIVE_SPEED_KMH = 30.0
 LIVE_N_MAX = 2
-LIVE_OPENING_COST = 0.01
-LIVE_UMKE = 4
-LIVE_MACHINERY = 2
-LIVE_SEED = 20201123
-
-SCENARIO_RATES = (
-    ("iyimser", "İyimser", 0.2, 0.9),
-    ("baz", "Baz", 0.5, 0.7),
-    ("kotumser", "Kötümser", 1.0, 0.4),
+LIVE_U_TOP = 3
+LIVE_W_TOP = 2
+LIVE_CENTERS = (
+    ("J1", "Avcılar Belediye Koordinasyon", 40.9790, 28.7210),
+    ("J2", "Ambarlı Lojistik", 40.9605, 28.6855),
 )
 
 PLAN_CAPTION = (
-    "Here-and-now karar: hangi merkez açılır (G), hangi tip ekip orada bekler (V), "
-    "UMKE (V^U) ve iş makinesi (V^W) nerede durur. Üç senaryo eşit ağırlıkla birlikte "
-    "çözülür; yol açıklığı enkaz kimliğine göre sabit bir çekiliştir (tohum "
-    f"{LIVE_SEED}, oranlar 0.9 / 0.7 / 0.4). Açma maliyeti sembolik {LIVE_OPENING_COST}, "
-    f"bütçe {LIVE_BUDGET}, en fazla {LIVE_N_MAX} merkez, kapsama {LIVE_RADIUS_KM:.0f} km, "
-    f"UMKE havuzu {LIVE_UMKE}, iş makinesi havuzu {LIVE_MACHINERY}. "
-    "Ekip kapasitesi tip içi ortalamadır. Bu plan Supabase atamasını değiştirmez."
+    "Rapor (4.4)–(4.10): G merkez açar, V ekip, V^U UMKE, V^W iş makinesi ön konumlar. "
+    "N_max merkez sayısıdır, parasal bütçe yoktur. β seyahat gecikmesidir; "
+    "τ(1+β) > 2 saat ise güzergâh kullanılamaz. "
+    f"Canlı τ, koordinattan {LIVE_SPEED_KMH:.0f} km/saat ile türetilir. "
+    f"UMKE havuzu {LIVE_U_TOP}, iş makinesi havuzu {LIVE_W_TOP}. "
+    "Bu plan Supabase kaydını değiştirmez."
 )
 
 
-def build_live_instance(
-    enkaz_rows: list[dict],
-    ekip_rows: list[dict],
-    *,
-    seed: int = LIVE_SEED,
-) -> Instance:
+def build_live_instance(enkaz_rows: list[dict], ekip_rows: list[dict]) -> Instance:
     sites = [_site_from_row(row) for row in sorted(enkaz_rows, key=lambda row: row["id"])]
     team_types = _team_types(ekip_rows)
-    fleet = sum(team.N for team in team_types)
-    centers = []
-    for spec in PLANNING_CENTERS:
-        centers.append(
-            Center(
-                j=spec.j,
-                name=spec.name,
-                lat=spec.lat,
-                lon=spec.lon,
-                f=LIVE_OPENING_COST,
-                cap={team.k: team.N for team in team_types},
-                cap_tot=max(fleet, 1),
-                cap_u=LIVE_UMKE,
-                cap_w=LIVE_MACHINERY,
-            )
-        )
-
-    rng = random.Random(seed)
-    scenarios = []
-    for key, name, beta, rate in SCENARIO_RATES:
-        # Kimlik sırasında çekilir; satır sırası sonucu değiştirmez.
-        flags = {}
+    capacity = {team.k: team.A for team in team_types}
+    centers = [
+        Center(j=key, name=name, C=dict(capacity), U_max=LIVE_U_TOP, W_max=LIVE_W_TOP)
+        for key, name, _lat, _lon in LIVE_CENTERS
+    ]
+    tau = {}
+    for key, _name, lat, lon in LIVE_CENTERS:
         for site in sites:
-            flags[site.i] = 1 if rng.random() < rate else 0
-        scenarios.append(Scenario(s=key, name=name, beta=beta, h=flags, pi=1.0))
-
+            tau[(key, site.i)] = haversine_km(lat, lon, site.lat, site.lon) / LIVE_SPEED_KMH
     return Instance(
         centers=centers,
         team_types=team_types,
         sites=sites,
-        scenarios=scenarios,
-        B=LIVE_BUDGET,
+        scenarios=_live_scenarios(sites),
+        tau=tau,
         N_max=LIVE_N_MAX,
-        N_U=LIVE_UMKE,
-        N_W=LIVE_MACHINERY,
-        radius_km=LIVE_RADIUS_KM,
+        U_top=LIVE_U_TOP,
+        W_top=LIVE_W_TOP,
+        L=2.0,
     )
 
 
@@ -103,12 +73,32 @@ def plan_view(instance: Instance, solution: Solution) -> dict:
     return {
         "status": solution.status,
         "objective": solution.objective,
-        "opening_cost": solution.opening_cost,
         "unmet": solution.unmet_cost,
+        "open_count": len(opened),
+        "team_count": sum(solution.V.values()),
         "rows": rows,
         "opened_names": opened,
         "caption": PLAN_CAPTION,
     }
+
+
+def _live_scenarios(sites: list[Site]) -> list[Scenario]:
+    demand = {site.i: site.m for site in sites}
+    specs = (
+        ("s1", "İyimser", 0.30, 0.10),
+        ("s2", "Beklenen", 0.45, 0.15),
+        ("s3", "Kötümser", 0.25, 0.50),
+    )
+    return [
+        Scenario(
+            s=key,
+            name=name,
+            P=probability,
+            D=dict(demand),
+            beta={site.i: beta for site in sites},
+        )
+        for key, name, probability, beta in specs
+    ]
 
 
 def _site_from_row(row: dict) -> Site:
@@ -118,8 +108,11 @@ def _site_from_row(row: dict) -> Site:
         demand = float(row["talep"])
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"Enkaz satırında enlem, boylam veya talep yok: {row.get('id')}") from exc
+    if demand <= 0:
+        raise ValueError(f"Enkaz {row.get('id')} talebi pozitif olmalı")
+    machine = 1 if row.get("makine_gerekli") else 0
     name = str(row.get("isim") or row["id"])
-    return Site(i=str(row["id"]), name=name, lat=lat, lon=lon, d=demand)
+    return Site(i=str(row["id"]), name=name, m=demand, E=machine, lat=lat, lon=lon)
 
 
 def _team_types(rows: list[dict]) -> list[TeamType]:
@@ -140,8 +133,8 @@ def _team_types(rows: list[dict]) -> list[TeamType]:
             TeamType(
                 k=key,
                 name=names[key],
-                N=len(capacities),
-                q=sum(capacities) / len(capacities),
+                A=len(capacities),
+                p=sum(capacities) / len(capacities),
             )
         )
     return types

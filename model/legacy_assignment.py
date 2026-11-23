@@ -1,7 +1,7 @@
 """Sekmedeki operasyonel ekip→enkaz atamasının taşınmış hali.
 
 h=0 enkazlar çağıran tarafta elenir. Her ekip en fazla bir enkaz alır.
-Etkin kapasite ``q / (1+β)`` ile birinci aşama modelindeki çarpanın aynısıdır.
+Etkin kapasite eski prototipteki q / (1+β) kuralıdır. Raporun β'si yol gecikmesidir.
 """
 
 from __future__ import annotations
@@ -10,7 +10,11 @@ from dataclasses import dataclass
 
 import pulp
 
-from model.instance import capacity_factor
+def capacity_factor(beta: float) -> float:
+    """Eski sekme: etkin kapasite = nominal / (1+β). Raporun gecikme β'si değildir."""
+
+    return 1.0 / (1.0 + float(beta))
+
 
 
 @dataclass(frozen=True)

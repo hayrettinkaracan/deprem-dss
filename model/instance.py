@@ -1,10 +1,7 @@
-"""Küme, parametre ve kapsama tanımları.
+"""Rapor notasyonu: kümeler, parametreler, yol kullanılabilirliği.
 
-İndeksler rapor notasyonuyla durur:
-    j  lojistik / koordinasyon merkezi
-    k  kurtarma ekip tipi
-    i  enkaz noktası
-    s  senaryo
+İndeksler: j merkez, k ekip tipi, i enkaz, s senaryo.
+β yol gecikmesidir. h, güzergâh açıksa ve τ(1+β) ≤ L ise 1'dir (Bölüm 4.3).
 """
 
 from __future__ import annotations
@@ -18,76 +15,67 @@ EARTH_RADIUS_KM = 6371.0088
 
 @dataclass(frozen=True)
 class Center:
-    """Aday merkez j."""
+    """Aday merkez j. C: C_{j,k}. U_max, W_max: merkez envanter üst sınırları."""
 
     j: str
     name: str
-    lat: float
-    lon: float
-    f: float
-    cap: dict[str, int]
-    cap_tot: int
-    cap_u: int
-    cap_w: int
+    C: dict[str, int]
+    U_max: int
+    W_max: int
 
 
 @dataclass(frozen=True)
 class TeamType:
-    """Ekip tipi k. N = N_k (eldeki ekip), q = nominal kişi kapasitesi."""
+    """Ekip tipi k. A = A_k, p = p_k (saat başına iş yükü)."""
 
     k: str
     name: str
-    N: int
-    q: float
+    A: int
+    p: float
 
 
 @dataclass(frozen=True)
 class Site:
-    """Enkaz noktası i. d = talep (kişi)."""
+    """Enkaz i. m = m_i (ekip-saat), E = E_i. Talep senaryodadır."""
 
     i: str
     name: str
-    lat: float
-    lon: float
-    d: float
+    m: float
+    E: int = 0
+    damage: str = ""
+    lat: float | None = None
+    lon: float | None = None
 
 
 @dataclass(frozen=True)
 class Scenario:
-    """Senaryo s. h[i] yolun açık olması, pi ağırlık (şimdilik 1)."""
+    """Senaryo s. P = P_s. beta[i], i'ye giden güzergâhların gecikme oranı."""
 
     s: str
     name: str
-    beta: float
-    h: dict[str, int]
-    pi: float = 1.0
+    P: float
+    D: dict[str, float]
+    beta: dict[str, float]
 
 
 @dataclass
 class Instance:
-    """Birinci aşama modeli için tüm veri.
+    """Birinci aşama verisi.
 
-    r_override verilirse mesafe kuralının yerine geçer; eksik (j, i) çiftleri
-    kapsamaz. a, yetkinlik a_{i,k} için yer tutucudur; boşsa her çift 1 kabul edilir.
+    tau[(j, i)] normal seyahat süresi (saat). a boşsa a_{i,k} = 1.
+    L periyot uzunluğudur; h eşiği ve bu kalemdeki tek periyotluk iş için kullanılır.
     """
 
     centers: list[Center]
     team_types: list[TeamType]
     sites: list[Site]
     scenarios: list[Scenario]
-    B: float
+    tau: dict[tuple[str, str], float]
     N_max: int
-    N_U: int
-    N_W: int
-    radius_km: float
-    r_override: dict[tuple[str, str], int] | None = None
-    a: dict[tuple[str, str], float] | None = field(default=None)
-
-
-def capacity_factor(beta: float) -> float:
-    """Prototipteki β tanımı: etkin kapasite = nominal × 1/(1+β)."""
-
-    return 1.0 / (1.0 + float(beta))
+    U_top: int
+    W_top: int
+    L: float = 2.0
+    a: dict[tuple[str, str], int] | None = field(default=None)
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -102,82 +90,89 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(hav))
 
 
-def competency(instance: Instance, i: str, k: str) -> float:
-    """a_{i,k}. Tanımsızsa 1 (ileride tip-enkaz yetkinliği buraya yazılacak)."""
+def competency(instance: Instance, i: str, k: str) -> int:
+    """a_{i,k}. Tabloda yoksa 1."""
 
     if not instance.a:
-        return 1.0
-    return float(instance.a.get((i, k), 1.0))
+        return 1
+    return 1 if instance.a.get((i, k), 1) else 0
 
 
-def coverage_matrix(instance: Instance) -> dict[tuple[str, str], int]:
-    """r_{j,i} ∈ {0,1}. Merkez, yarıçap içindeki enkazı kapsar."""
+def route_open(tau: float, beta: float, period_hours: float) -> int:
+    """h = 1 ancak gecikme dahil seyahat bir periyodu aşmıyorsa (rapor 4.3)."""
 
-    if instance.r_override is not None:
-        covered = {}
-        for center in instance.centers:
-            for site in instance.sites:
-                covered[(center.j, site.i)] = 1 if instance.r_override.get((center.j, site.i), 0) else 0
-        return covered
+    travel = tau * (1.0 + beta)
+    return 1 if travel <= period_hours + 1e-9 else 0
 
-    covered = {}
+
+def h_matrix(instance: Instance) -> dict[tuple[str, str, str], int]:
+    """h_{j,i,s}. Bu kalemde periyot ayrımı yok; çıkış kuralı L eşiğidir."""
+
+    usable = {}
     for center in instance.centers:
         for site in instance.sites:
-            distance = haversine_km(center.lat, center.lon, site.lat, site.lon)
-            covered[(center.j, site.i)] = 1 if distance <= instance.radius_km + 1e-9 else 0
-    return covered
+            tau = instance.tau[(center.j, site.i)]
+            for scenario in instance.scenarios:
+                usable[(center.j, site.i, scenario.s)] = route_open(
+                    tau, scenario.beta[site.i], instance.L
+                )
+    return usable
 
 
 def validate(instance: Instance) -> None:
-    if instance.B < 0:
-        raise ValueError("Açma bütçesi B negatif olamaz")
     if instance.N_max < 0:
-        raise ValueError("Açılabilecek merkez sayısı Nmax negatif olamaz")
-    if instance.N_U < 0 or instance.N_W < 0:
-        raise ValueError("UMKE ve iş makinesi sayıları negatif olamaz")
-    if instance.radius_km <= 0:
-        raise ValueError("Kapsama yarıçapı pozitif olmalı")
+        raise ValueError("N_max negatif olamaz")
+    if instance.U_top < 0 or instance.W_top < 0:
+        raise ValueError("U_top ve W_top negatif olamaz")
+    if instance.L <= 0:
+        raise ValueError("L pozitif olmalı")
 
     seen_j = set()
     for center in instance.centers:
         if center.j in seen_j:
-            raise ValueError(f"Yinelenen merkez indeksi: {center.j}")
+            raise ValueError(f"Yinelenen merkez: {center.j}")
         seen_j.add(center.j)
-        if center.f < 0 or center.cap_tot < 0 or center.cap_u < 0 or center.cap_w < 0:
-            raise ValueError(f"Merkez {center.j} parametreleri negatif olamaz")
+        if center.U_max < 0 or center.W_max < 0:
+            raise ValueError(f"Merkez {center.j} envanter üst sınırı negatif")
 
     seen_k = set()
     for team in instance.team_types:
         if team.k in seen_k:
             raise ValueError(f"Yinelenen ekip tipi: {team.k}")
         seen_k.add(team.k)
-        if team.N < 0 or team.q < 0:
-            raise ValueError(f"Ekip tipi {team.k} parametreleri negatif olamaz")
+        if team.A < 0 or team.p < 0:
+            raise ValueError(f"Ekip tipi {team.k} parametresi negatif")
         for center in instance.centers:
-            if team.k not in center.cap:
-                raise ValueError(f"Merkez {center.j} için Cap_{{j,{team.k}}} yok")
-            if center.cap[team.k] < 0:
-                raise ValueError(f"Cap_{{{center.j},{team.k}}} negatif olamaz")
+            if team.k not in center.C or center.C[team.k] < 0:
+                raise ValueError(f"C_{{{center.j},{team.k}}} tanımlı ve negatif olmamalı")
 
     seen_i = set()
     for site in instance.sites:
         if site.i in seen_i:
-            raise ValueError(f"Yinelenen enkaz indeksi: {site.i}")
+            raise ValueError(f"Yinelenen enkaz: {site.i}")
         seen_i.add(site.i)
-        if site.d < 0:
-            raise ValueError(f"Enkaz {site.i} talebi negatif olamaz")
+        if site.m <= 0:
+            raise ValueError(f"m_{site.i} pozitif olmalı")
+        if site.E not in (0, 1):
+            raise ValueError(f"E_{site.i} 0 veya 1 olmalı")
+        for center in instance.centers:
+            if (center.j, site.i) not in instance.tau or instance.tau[(center.j, site.i)] < 0:
+                raise ValueError(f"tau_{{{center.j},{site.i}}} tanımlı olmalı")
 
     seen_s = set()
     for scenario in instance.scenarios:
         if scenario.s in seen_s:
             raise ValueError(f"Yinelenen senaryo: {scenario.s}")
         seen_s.add(scenario.s)
-        if scenario.beta < 0:
-            raise ValueError(f"Senaryo {scenario.s} beta negatif olamaz")
-        if scenario.pi < 0:
-            raise ValueError(f"Senaryo {scenario.s} ağırlığı negatif olamaz")
+        if scenario.P < 0:
+            raise ValueError(f"P_{scenario.s} negatif olamaz")
         for site in instance.sites:
-            if site.i not in scenario.h:
-                raise ValueError(f"h_{{{site.i},{scenario.s}}} tanımlı değil")
-            if scenario.h[site.i] not in (0, 1):
-                raise ValueError(f"h_{{{site.i},{scenario.s}}} 0 veya 1 olmalı")
+            if site.i not in scenario.D or scenario.D[site.i] < 0:
+                raise ValueError(f"D_{{{site.i},{scenario.s}}} tanımlı olmalı")
+            if site.i not in scenario.beta or scenario.beta[site.i] < 0:
+                raise ValueError(f"beta_{{{site.i},{scenario.s}}} tanımlı olmalı")
+
+    if instance.a:
+        for value in instance.a.values():
+            if value not in (0, 1):
+                raise ValueError("a_{i,k} 0 veya 1 olmalı")

@@ -1,4 +1,4 @@
-"""Birinci aşama kısıtları ve Bölüm 5.3 doğrulaması."""
+"""Rapor (4.4)–(4.10) ve Çizelge 5.1."""
 
 from __future__ import annotations
 
@@ -9,13 +9,17 @@ from pathlib import Path
 import pulp
 import pytest
 
-from data.section_5_3 import COVERAGE_53, section_5_3
+from data.section_5_3 import PERIODS, TAU, section_5_3
 from model.checks import violations
-from model.instance import coverage_matrix
+from model.instance import h_matrix, route_open
 from model.planning_inputs import build_live_instance
-from model.problem import format_solution, solve_first_stage
+from model.problem import constraint_names, format_solution, solve_first_stage
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# τ(1+β) ≤ 2 kuralının elle hesabı. s1 ve s2 aynı desene düşer.
+H_S1 = {"J1": "11000", "J2": "01110"}
+H_S3 = {"J1": "01000", "J2": "00100"}
 
 
 def _solve(instance):
@@ -23,8 +27,34 @@ def _solve(instance):
     return solve_first_stage(instance, solver=solver)
 
 
-def test_section_53_coverage_matches_documented_radius():
-    assert coverage_matrix(section_5_3()) == COVERAGE_53
+def test_table_5_1_and_route_rule():
+    instance = section_5_3()
+    assert PERIODS == 36
+    assert instance.L == 2
+    assert [site.m for site in instance.sites] == [4.0, 3.0, 2.5, 1.5, 4.5]
+    assert [site.E for site in instance.sites] == [1, 1, 0, 0, 1]
+    assert [site.damage for site in instance.sites] == ["Ağır", "Orta", "Orta", "Hafif", "Ağır"]
+    assert [team.A for team in instance.team_types] == [1, 2, 1]
+    assert instance.U_top == 3 and instance.W_top == 2 and instance.N_max == 2
+    assert instance.tau == TAU
+    assert [scenario.P for scenario in instance.scenarios] == pytest.approx([0.30, 0.45, 0.25])
+    assert sum(scenario.P for scenario in instance.scenarios) == pytest.approx(1)
+
+    usable = h_matrix(instance)
+    for scenario, expected in (("s1", H_S1), ("s2", H_S1), ("s3", H_S3)):
+        for center, bits in expected.items():
+            got = "".join(str(usable[(center, f"I{n}", scenario)]) for n in range(1, 6))
+            assert got == bits
+    # I5 hiçbir senaryoda iki saatin altında değil.
+    assert route_open(3.0, 0.10, 2) == 0
+    assert route_open(1.5, 0.10, 2) == 1
+
+
+def test_constraint_names_are_report_equations():
+    names = constraint_names(section_5_3())
+    for prefix in ("eq_4_4_", "eq_4_5_", "eq_4_6_", "eq_4_7_", "eq_4_8_", "eq_4_9_", "eq_4_10_"):
+        assert any(name.startswith(prefix) for name in names)
+    assert not any("budget" in name or "cap_tot" in name for name in names)
 
 
 def test_section_53_optimal_and_first_stage_constraints():
@@ -34,46 +64,31 @@ def test_section_53_optimal_and_first_stage_constraints():
 
     assert solution.status == "Optimal"
     assert not violations(instance, solution)
-
-    # Bütçe j1+j3 = 160 ile dolar. Karşılanmayan talep senaryolara 190+310+450 dağılır.
-    assert solution.G == {"j1": 1, "j2": 0, "j3": 1}
-    assert solution.opening_cost == pytest.approx(160.0)
-    assert solution.unmet_cost == pytest.approx(950.0)
-    assert solution.objective == pytest.approx(1110.0)
-
+    assert solution.G == {"J1": 1, "J2": 1}
     assert solution.V == {
-        ("j1", "hafif"): 2,
-        ("j1", "orta"): 0,
-        ("j1", "agir"): 1,
-        ("j2", "hafif"): 0,
-        ("j2", "orta"): 0,
-        ("j2", "agir"): 0,
-        ("j3", "hafif"): 0,
-        ("j3", "orta"): 1,
-        ("j3", "agir"): 0,
+        ("J1", "hafif"): 0,
+        ("J1", "orta"): 1,
+        ("J1", "agir"): 1,
+        ("J2", "hafif"): 1,
+        ("J2", "orta"): 1,
+        ("J2", "agir"): 0,
     }
-    assert solution.VU == {"j1": 2, "j2": 0, "j3": 1}
-    assert solution.VW == {"j1": 1, "j2": 0, "j3": 1}
-    assert sum(solution.unmet[(site.i, "iyimser")] for site in instance.sites) == pytest.approx(190.0)
-    assert sum(solution.unmet[(site.i, "baz")] for site in instance.sites) == pytest.approx(310.0)
-    assert sum(solution.unmet[(site.i, "kotumser")] for site in instance.sites) == pytest.approx(450.0)
+    assert solution.VU == {"J1": 0, "J2": 0}
+    assert solution.VW == {"J1": 0, "J2": 0}
+    assert sum(solution.V.values()) == 4
+    # s1 = s2 = 8/3 + 1.2 + 14 = 268/15; s3 = 12+4+10 = 26; beklenti 19.9
+    assert sum(solution.unmet[(site.i, "s1")] for site in instance.sites) == pytest.approx(268 / 15)
+    assert sum(solution.unmet[(site.i, "s3")] for site in instance.sites) == pytest.approx(26)
+    assert solution.objective == pytest.approx(19.9)
 
     again = _solve(section_5_3())
-    assert again.G == solution.G
-    assert again.V == solution.V
-    assert again.VU == solution.VU
-    assert again.VW == solution.VW
-
-    for team in instance.team_types:
-        placed = sum(solution.V[(center.j, team.k)] for center in instance.centers)
-        assert placed == team.N
+    assert again.G == solution.G and again.V == solution.V
+    assert again.VU == solution.VU and again.VW == solution.VW
 
 
-def test_second_stage_uses_only_prepositioned_teams():
+def test_second_stage_uses_only_prepositioned_teams_and_open_routes():
     instance = section_5_3()
     solution = _solve(instance)
-    assert solution.status == "Optimal"
-
     for center in instance.centers:
         for team in instance.team_types:
             for scenario in instance.scenarios:
@@ -81,17 +96,15 @@ def test_second_stage_uses_only_prepositioned_teams():
                     solution.y[(center.j, team.k, site.i, scenario.s)] for site in instance.sites
                 )
                 assert dispatched <= solution.V[(center.j, team.k)]
-                if solution.G[center.j] == 0:
-                    assert dispatched == 0
                 for site in instance.sites:
                     flow = solution.y[(center.j, team.k, site.i, scenario.s)]
-                    if scenario.h[site.i] == 0 or solution.coverage[(center.j, site.i)] == 0:
+                    if solution.h[(center.j, site.i, scenario.s)] == 0:
                         assert flow == 0
 
 
-def test_zero_budget_no_prepositioning():
+def test_nmax_zero_blocks_prepositioning():
     instance = section_5_3()
-    instance.B = 0
+    instance.N_max = 0
     solution = _solve(instance)
     assert solution.status == "Optimal"
     assert not violations(instance, solution)
@@ -100,48 +113,41 @@ def test_zero_budget_no_prepositioning():
     assert all(value == 0 for value in solution.VU.values())
     assert all(value == 0 for value in solution.VW.values())
     assert all(value == 0 for value in solution.y.values())
-    total_demand = sum(scenario.pi * site.d for scenario in instance.scenarios for site in instance.sites)
-    assert solution.objective == pytest.approx(total_demand)
-    assert solution.opening_cost == pytest.approx(0.0)
+    assert solution.objective == pytest.approx(40)
 
 
-def test_closing_center_changes_outcome():
-    base_instance = section_5_3()
-    base = _solve(base_instance)
-    assert base.G["j1"] == 1
-
+def test_closing_j1_changes_outcome():
+    base = _solve(section_5_3())
+    assert base.G["J1"] == 1
     closed = section_5_3()
-    closed.centers = [center for center in closed.centers if center.j != "j1"]
+    closed.centers = [center for center in closed.centers if center.j != "J1"]
     alternative = _solve(closed)
-
     assert alternative.status == "Optimal"
     assert not violations(closed, alternative)
-    assert alternative.G == {"j2": 1, "j3": 1}
-    assert alternative.objective == pytest.approx(1330.0)
-    assert alternative.objective > base.objective + 1.0
+    assert alternative.G == {"J2": 1}
+    assert alternative.objective == pytest.approx(25.9)
+    assert alternative.objective > base.objective + 1
 
 
-def test_zero_scenario_weight_does_not_open_centers():
+def test_zero_probability_does_not_open_centers():
     instance = section_5_3()
-    instance.scenarios = [replace(scenario, pi=0.0) for scenario in instance.scenarios]
+    instance.scenarios = [replace(scenario, P=0.0) for scenario in instance.scenarios]
     solution = _solve(instance)
     assert solution.status == "Optimal"
-    assert not violations(instance, solution)
-    assert solution.objective == pytest.approx(0.0)
+    assert solution.objective == pytest.approx(0)
     assert all(value == 0 for value in solution.G.values())
 
 
 def test_competency_zero_removes_service():
     instance = section_5_3()
     instance.a = {
-        (site.i, team.k): 0.0 for site in instance.sites for team in instance.team_types
+        (site.i, team.k): 0 for site in instance.sites for team in instance.team_types
     }
     solution = _solve(instance)
     assert solution.status == "Optimal"
+    assert not violations(instance, solution)
     assert all(value == 0 for value in solution.G.values())
-    assert all(value == 0 for value in solution.V.values())
-    total_demand = sum(site.d for site in instance.sites) * len(instance.scenarios)
-    assert solution.objective == pytest.approx(total_demand)
+    assert solution.objective == pytest.approx(40)
 
 
 def test_live_adapter_is_deterministic_and_feasible():
@@ -155,10 +161,8 @@ def test_live_adapter_is_deterministic_and_feasible():
     ]
     first = build_live_instance(enkaz, ekipler)
     second = build_live_instance(list(reversed(enkaz)), list(reversed(ekipler)))
-    for left, right in zip(first.scenarios, second.scenarios):
-        assert left.h == right.h
-        assert left.beta in (0.2, 0.5, 1.0)
-
+    assert first.tau == second.tau
+    assert [scenario.P for scenario in first.scenarios] == pytest.approx([0.30, 0.45, 0.25])
     solution = _solve(first)
     assert solution.status == "Optimal"
     assert not violations(first, solution)

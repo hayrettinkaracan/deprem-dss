@@ -17,7 +17,7 @@ streamlit run app.py
 
 ## Model (1/11)
 
-Birinci aşama kararları `model/` paketindedir: merkez açma `G_j`, ekip ön konumlandırma `V_{j,k}`, UMKE `V^U_j`, iş makinesi `V^W_j`. Paket Streamlit ve Supabase import etmez. "Atama Çalıştır" sekmesi bu planı gösterir; Supabase'e yazılan operasyonel atama seçilen tek senaryo için eskisi gibi kalır.
+Birinci aşama kararları `model/` paketindedir ve rapor (4.4)–(4.10) ile Çizelge 5.1'e göredir: `G_j`, `V_{j,k}`, `V^U_j`, `V^W_j`. Paket Streamlit ve Supabase import etmez. "Atama Çalıştır" sekmesi bu planı gösterir; Supabase'e yazılan operasyonel atama seçilen tek senaryo için eskisi gibi kalır.
 
 ```bash
 python -m pytest -q

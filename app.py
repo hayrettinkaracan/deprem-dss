@@ -130,8 +130,8 @@ if rol == "Admin":
         h_orani = {"İyimser": 0.9, "Baz": 0.7, "Kötümser": 0.4}[senaryo]
         st.caption(f"β = {beta} | Açık yol oranı h ≈ {h_orani}")
         st.caption(
-            "Operasyonel atama yalnızca seçilen senaryoyu kullanır ve Supabase'e yazılır. "
-            "Birinci aşama planı üç senaryoyu birlikte değerlendirir."
+            "Operasyonel atama seçilen senaryoyu eski kapasite çarpanıyla Supabase'e yazar. "
+            "Birinci aşama planı rapor senaryolarını birlikte çözer; β orada yol gecikmesidir."
         )
 
         if st.button("Atamayı Çalıştır (PuLP ile)"):
@@ -219,10 +219,10 @@ if rol == "Admin":
         if view:
             st.subheader("Birinci aşama planı (G, V, V^U, V^W)")
             st.caption(view["caption"])
-            col_obj, col_open, col_unmet = st.columns(3)
-            col_obj.metric("Amaç", f"{view['objective']:.1f}")
-            col_open.metric("Açma maliyeti", f"{view['opening_cost']:.2f}")
-            col_unmet.metric("Karşılanmayan talep", f"{view['unmet']:.1f}")
+            col_obj, col_open, col_teams = st.columns(3)
+            col_obj.metric("Beklenen karşılanmayan talep", f"{view['objective']:.1f}")
+            col_open.metric("Açık merkez", view["open_count"])
+            col_teams.metric("Ön konumlanan ekip", view["team_count"])
             st.dataframe(pd.DataFrame(view["rows"]))
             if view["opened_names"]:
                 st.success("Açılan merkezler: " + ", ".join(view["opened_names"]))
