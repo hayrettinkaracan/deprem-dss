@@ -1,5 +1,5 @@
 streamlit
-pulp
+pulp>=2.8,<3
 pandas
 supabase
 python-dotenv
