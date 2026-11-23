@@ -2,8 +2,11 @@ import streamlit as st
 import pandas as pd
 import random
 from datetime import datetime
-import pulp
 from supabase import create_client, Client
+
+from model.legacy_assignment import solve_team_to_site
+from model.planning_inputs import build_live_instance, plan_view
+from model.problem import solve_first_stage
 
 # Supabase bağlantısı (secrets.toml veya env'den)
 @st.cache_resource
@@ -126,68 +129,106 @@ if rol == "Admin":
         beta = {"İyimser": 0.2, "Baz": 0.5, "Kötümser": 1.0}[senaryo]
         h_orani = {"İyimser": 0.9, "Baz": 0.7, "Kötümser": 0.4}[senaryo]
         st.caption(f"β = {beta} | Açık yol oranı h ≈ {h_orani}")
-        
+        st.caption(
+            "Operasyonel atama yalnızca seçilen senaryoyu kullanır ve Supabase'e yazılır. "
+            "Birinci aşama planı üç senaryoyu birlikte değerlendirir."
+        )
+
         if st.button("Atamayı Çalıştır (PuLP ile)"):
             enkaz_resp = supabase.table("enkazlar").select("*").eq("durum", "aktif").execute()
             ekip_resp = supabase.table("ekipler").select("*").eq("durum", "musait").eq("tip", "Arama-Kurtarma").execute()
-            
+
             enkazlar = pd.DataFrame(enkaz_resp.data)
             ekipler = pd.DataFrame(ekip_resp.data)
-            
+
             if len(enkazlar) == 0 or len(ekipler) == 0:
-                st.warning("Aktif enkaz veya müsait Arama-Kurtarma ekibi yok")
+                st.session_state["ops_notice"] = (
+                    "warning",
+                    "Aktif enkaz veya müsait Arama-Kurtarma ekibi yok",
+                )
+                st.session_state.pop("plan_view", None)
+                st.session_state.pop("plan_error", None)
             else:
-                enkazlar['h'] = [1 if random.random() < h_orani else 0 for _ in range(len(enkazlar))]
-                acik_enkazlar = enkazlar[enkazlar['h'] == 1]
-                
+                enkazlar["h"] = [1 if random.random() < h_orani else 0 for _ in range(len(enkazlar))]
+                acik_enkazlar = enkazlar[enkazlar["h"] == 1]
+
                 if len(acik_enkazlar) == 0:
-                    st.warning("Bu senaryoda tüm yollar kapalı (h=0)")
+                    st.session_state["ops_notice"] = (
+                        "warning",
+                        "Bu senaryoda tüm yollar kapalı (h=0)",
+                    )
                 else:
-                    etkin_carpan = 1.0 / (1.0 + beta)
-                    
-                    prob = pulp.LpProblem("Ekip_Atama", pulp.LpMinimize)
-                    x = pulp.LpVariable.dicts("atama", 
-                                              ((e['id'], z['id']) for _, e in ekipler.iterrows() for _, z in acik_enkazlar.iterrows()),
-                                              cat='Binary')
-                    unmet = pulp.LpVariable.dicts("unmet", acik_enkazlar['id'].tolist(), lowBound=0)
-                    prob += pulp.lpSum(unmet[z['id']] for _, z in acik_enkazlar.iterrows())
-                    
-                    for _, z in acik_enkazlar.iterrows():
-                        assigned_cap = pulp.lpSum(x[e['id'], z['id']] * e['kapasite'] * etkin_carpan
-                                                  for _, e in ekipler.iterrows())
-                        prob += unmet[z['id']] >= z['talep'] - assigned_cap
-                    
-                    for _, e in ekipler.iterrows():
-                        prob += pulp.lpSum(x[e['id'], z['id']] for _, z in acik_enkazlar.iterrows()) <= 1
-                    
-                    status = prob.solve(pulp.PULP_CBC_CMD(msg=0))
-                    
-                    if pulp.LpStatus[status] == 'Optimal':
+                    team_rows = ekipler.to_dict("records")
+                    site_rows = acik_enkazlar.to_dict("records")
+                    result = solve_team_to_site(team_rows, site_rows, beta)
+
+                    if result.status == "Optimal":
                         atanan = 0
-                        for _, e in ekipler.iterrows():
-                            for _, z in acik_enkazlar.iterrows():
-                                if pulp.value(x[e['id'], z['id']]) > 0.5:
-                                    bas = datetime.now().isoformat()
-                                    supabase.table("atamalar").insert({
-                                        "ekip_id": int(e['id']),
-                                        "enkaz_id": int(z['id']),
-                                        "baslangic": bas,
-                                        "durum": "devam"
-                                    }).execute()
-                                    supabase.table("ekipler").update({"durum": "meşgul"}).eq("id", int(e['id'])).execute()
-                                    etkin_kap = e['kapasite'] * etkin_carpan
-                                    yeni_talep = max(0, z['talep'] - etkin_kap)
-                                    supabase.table("enkazlar").update({
-                                        "talep": yeni_talep,
-                                        "durum": "tamam" if yeni_talep <= 0 else "aktif"
-                                    }).eq("id", int(z['id'])).execute()
-                                    atanan += 1
+                        team_by_id = {team["id"]: team for team in team_rows}
+                        site_by_id = {site["id"]: site for site in site_rows}
+                        for assignment in result.assignments:
+                            team = team_by_id[assignment.ekip_id]
+                            site = site_by_id[assignment.enkaz_id]
+                            bas = datetime.now().isoformat()
+                            supabase.table("atamalar").insert({
+                                "ekip_id": int(team["id"]),
+                                "enkaz_id": int(site["id"]),
+                                "baslangic": bas,
+                                "durum": "devam",
+                            }).execute()
+                            supabase.table("ekipler").update({"durum": "meşgul"}).eq("id", int(team["id"])).execute()
+                            yeni_talep = max(0, site["talep"] - assignment.etkin_kapasite)
+                            supabase.table("enkazlar").update({
+                                "talep": yeni_talep,
+                                "durum": "tamam" if yeni_talep <= 0 else "aktif",
+                            }).eq("id", int(site["id"])).execute()
+                            atanan += 1
                         kapali = len(enkazlar) - len(acik_enkazlar)
-                        st.success(f"{atanan} ekip atandı | β={beta} | Kapalı yol: {kapali} enkaz")
+                        st.session_state["ops_notice"] = (
+                            "success",
+                            f"{atanan} ekip atandı | β={beta} | Kapalı yol: {kapali} enkaz",
+                        )
                     else:
-                        st.error("Model çözülemedi")
+                        st.session_state["ops_notice"] = ("error", "Model çözülemedi")
+
+                try:
+                    plan_instance = build_live_instance(
+                        enkazlar.to_dict("records"),
+                        ekipler.to_dict("records"),
+                    )
+                    plan_solution = solve_first_stage(plan_instance)
+                    if plan_solution.status != "Optimal":
+                        st.session_state["plan_error"] = f"Plan çözümü {plan_solution.status}"
+                        st.session_state.pop("plan_view", None)
+                    else:
+                        st.session_state["plan_view"] = plan_view(plan_instance, plan_solution)
+                        st.session_state.pop("plan_error", None)
+                except Exception as exc:
+                    st.session_state["plan_error"] = str(exc)
+                    st.session_state.pop("plan_view", None)
             st.rerun()
-        
+
+        notice = st.session_state.get("ops_notice")
+        if notice:
+            level, text = notice
+            getattr(st, level)(text)
+
+        if st.session_state.get("plan_error"):
+            st.warning(f"Birinci aşama planı kurulamadı: {st.session_state['plan_error']}")
+        view = st.session_state.get("plan_view")
+        if view:
+            st.subheader("Birinci aşama planı (G, V, V^U, V^W)")
+            st.caption(view["caption"])
+            col_obj, col_open, col_unmet = st.columns(3)
+            col_obj.metric("Amaç", f"{view['objective']:.1f}")
+            col_open.metric("Açma maliyeti", f"{view['opening_cost']:.2f}")
+            col_unmet.metric("Karşılanmayan talep", f"{view['unmet']:.1f}")
+            st.dataframe(pd.DataFrame(view["rows"]))
+            if view["opened_names"]:
+                st.success("Açılan merkezler: " + ", ".join(view["opened_names"]))
+            else:
+                st.info("Plan hiçbir merkezi açmadı.")
+
         st.info("Not: h=0 olan enkazlara atama yapılmaz. β etkin kapasiteyi düşürür. Tamamlanmış atamalar korunur.")
     
     with tab4:

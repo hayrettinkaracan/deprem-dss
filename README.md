@@ -15,4 +15,10 @@ streamlit run app.py
 - Ekip: Görev görme, "Görevim Bitti" ile serbest kalma
 - Çoklu ekip, bağımsız bitiş, yeniden atama hazır
 
-Tam PuLP MILP modeli sonraki adımda entegre edilecek.
+## Model (1/11)
+
+Birinci aşama kararları `model/` paketindedir: merkez açma `G_j`, ekip ön konumlandırma `V_{j,k}`, UMKE `V^U_j`, iş makinesi `V^W_j`. Paket Streamlit ve Supabase import etmez. "Atama Çalıştır" sekmesi bu planı gösterir; Supabase'e yazılan operasyonel atama seçilen tek senaryo için eskisi gibi kalır.
+
+```bash
+python -m pytest -q
+```
