@@ -17,6 +17,7 @@ from supabase import create_client
 from model.legacy_assignment import solve_team_to_site
 from model.planning_inputs import build_live_instance, plan_view
 from model.problem import solve_first_stage
+from model.routing import CHAIN_CAPTION, chain_rows, solve_team_chains
 
 READ_CACHE_TTL_SECONDS = 20
 TALEP_UST_SINIR = 1_000_000
@@ -399,6 +400,25 @@ def render_son_atama():
         st.caption("Kapalı yol nedeniyle atama yapılmayan enkazlar: " + ", ".join(son["kapali"]))
 
 
+def _zinciri_kaydet(plan_instance):
+    try:
+        chain_solution = solve_team_chains(plan_instance, time_limit=20)
+    except Exception as exc:
+        st.session_state["chain_error"] = str(exc)
+        st.session_state.pop("chain_view", None)
+        return
+    if chain_solution.status != "Optimal":
+        st.session_state["chain_error"] = f"Zincir çözümü {chain_solution.status}"
+        st.session_state.pop("chain_view", None)
+        return
+    st.session_state["chain_view"] = {
+        "objective": chain_solution.objective,
+        "caption": CHAIN_CAPTION,
+        "rows": chain_rows(plan_instance, chain_solution),
+    }
+    st.session_state.pop("chain_error", None)
+
+
 def render_birinci_asama():
     if st.session_state.get("plan_error"):
         st.warning(f"Birinci aşama planı kurulamadı: {st.session_state['plan_error']}")
@@ -430,6 +450,14 @@ def render_birinci_asama():
         st.success("Açılan merkezler: " + ", ".join(view["opened_names"]))
     else:
         st.info("Plan hiçbir merkezi açmadı.")
+    if st.session_state.get("chain_error"):
+        st.warning(f"Ekip zinciri kurulamadı: {st.session_state['chain_error']}")
+    chain_view = st.session_state.get("chain_view")
+    if chain_view:
+        st.subheader("Ekip zincirleri (Y)")
+        st.caption(chain_view["caption"])
+        st.metric("Zincir modeli amaç", f"{chain_view['objective']:.1f}")
+        st.dataframe(pd.DataFrame(chain_view["rows"]), hide_index=True)
 
 
 def main():
@@ -693,6 +721,8 @@ def main():
                     }
                     st.session_state.pop("plan_view", None)
                     st.session_state.pop("plan_error", None)
+                    st.session_state.pop("chain_view", None)
+                    st.session_state.pop("chain_error", None)
                 else:
                     enkazlar["h"] = [1 if random.random() < h_orani else 0 for _ in range(len(enkazlar))]
                     acik_enkazlar = enkazlar[enkazlar["h"] == 1]
@@ -762,12 +792,17 @@ def main():
                         if plan_solution.status != "Optimal":
                             st.session_state["plan_error"] = f"Plan çözümü {plan_solution.status}"
                             st.session_state.pop("plan_view", None)
+                            st.session_state.pop("chain_view", None)
+                            st.session_state.pop("chain_error", None)
                         else:
                             st.session_state["plan_view"] = plan_view(plan_instance, plan_solution)
                             st.session_state.pop("plan_error", None)
+                            _zinciri_kaydet(plan_instance)
                     except Exception as exc:
                         st.session_state["plan_error"] = str(exc)
                         st.session_state.pop("plan_view", None)
+                        st.session_state.pop("chain_view", None)
+                        st.session_state.pop("chain_error", None)
                 refresh()
                 st.rerun()
             st.info("Not: h=0 olan enkazlara atama yapılmaz. β etkin kapasiteyi düşürür. Tamamlanmış atamalar korunur.")
