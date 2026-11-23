@@ -11,9 +11,12 @@ import random
 from datetime import datetime
 
 import pandas as pd
-import pulp
 import streamlit as st
 from supabase import create_client
+
+from model.legacy_assignment import solve_team_to_site
+from model.planning_inputs import build_live_instance, plan_view
+from model.problem import solve_first_stage
 
 READ_CACHE_TTL_SECONDS = 20
 TALEP_UST_SINIR = 1_000_000
@@ -396,6 +399,39 @@ def render_son_atama():
         st.caption("Kapalı yol nedeniyle atama yapılmayan enkazlar: " + ", ".join(son["kapali"]))
 
 
+def render_birinci_asama():
+    if st.session_state.get("plan_error"):
+        st.warning(f"Birinci aşama planı kurulamadı: {st.session_state['plan_error']}")
+    view = st.session_state.get("plan_view")
+    if not view:
+        return
+    st.subheader("Birinci aşama planı (G, V, V^U, V^W)")
+    st.caption(view["caption"])
+    col_obj, col_open, col_teams = st.columns(3)
+    col_obj.metric("Beklenen karşılanmayan talep", f"{view['objective']:.1f}")
+    col_open.metric("Açık merkez", view["open_count"])
+    col_teams.metric("Ön konumlanan ekip", view["team_count"])
+    frame = pd.DataFrame(view["rows"])
+    if "Açık" in frame.columns:
+        frame["Açık"] = frame["Açık"].map(
+            lambda value: {"evet": "Evet", "hayır": "Hayır"}.get(str(value).lower(), value)
+        )
+    config = {
+        "Merkez": st.column_config.TextColumn("Merkez"),
+        "Açık": st.column_config.TextColumn("Açık"),
+        "UMKE": st.column_config.NumberColumn("UMKE", format="%d"),
+        "İş makinesi": st.column_config.NumberColumn("İş makinesi", format="%d"),
+    }
+    for column in frame.columns:
+        if column not in config and pd.api.types.is_numeric_dtype(frame[column]):
+            config[column] = st.column_config.NumberColumn(column, format="%d")
+    st.dataframe(frame, hide_index=True, column_config=config)
+    if view["opened_names"]:
+        st.success("Açılan merkezler: " + ", ".join(view["opened_names"]))
+    else:
+        st.info("Plan hiçbir merkezi açmadı.")
+
+
 def main():
     # İlk Streamlit çağrısı bu olmalı.
     st.set_page_config(page_title="Deprem Kaynak Atama DSS", layout="wide")
@@ -457,6 +493,7 @@ def main():
     if rol == "Admin":
         st.header("Admin Paneli")
         render_son_atama()
+        render_birinci_asama()
         tab_enkaz, tab_ekip, tab_atama, tab_durum = st.tabs(
             ["Enkazlar", "Ekipler", "Atama Çalıştır", "Durum"]
         )
@@ -619,18 +656,23 @@ def main():
                 ["İyimser", "Baz", "Kötümser"],
                 key="senaryo",
                 help=(
-                    "β etkin kapasiteyi düşürür: kapasite / (1+β). "
+                    "Operasyonel atamada β etkin kapasiteyi düşürür: kapasite / (1+β). "
                     "h, yolun açık olma olasılığıdır; çekilişte h=0 çıkan enkaza atama yapılmaz. "
+                    "Birinci aşama planı üç rapor senaryosunu birlikte çözer; orada β yol gecikmesidir. "
                     "İyimser β=0,2 ve h≈0,9. Baz β=0,5 ve h≈0,7. Kötümser β=1,0 ve h≈0,4."
                 ),
             )
             beta = {"İyimser": 0.2, "Baz": 0.5, "Kötümser": 1.0}[senaryo]
             h_orani = {"İyimser": 0.9, "Baz": 0.7, "Kötümser": 0.4}[senaryo]
             st.caption(f"β = {beta} | Açık yol oranı h ≈ {h_orani}")
+            st.caption(
+                "Operasyonel atama seçilen senaryoyu eski kapasite çarpanıyla Supabase'e yazar. "
+                "Birinci aşama planı rapor senaryolarını birlikte çözer; β orada yol gecikmesidir."
+            )
             if st.button(
                 "Atamayı Çalıştır (PuLP ile)",
                 key="atama_calistir",
-                help="Müsait arama-kurtarma ekiplerini, yolu açık görünen aktif enkazlara atar.",
+                help="Müsait arama-kurtarma ekiplerini, yolu açık görünen aktif enkazlara atar ve birinci aşama planını çözer.",
             ):
                 enkazlar = pd.DataFrame(
                     fetch_now("enkazlar", "*", (("eq", "durum", "aktif"),))
@@ -643,113 +685,89 @@ def main():
                     )
                 )
                 if len(enkazlar) == 0 or len(ekipler) == 0:
-                    sonuc = {
+                    st.session_state["son_atama"] = {
                         "level": "warning",
                         "mesaj": "Aktif enkaz veya müsait Arama-Kurtarma ekibi yok",
                         "satirlar": [],
                         "kapali": [],
                     }
+                    st.session_state.pop("plan_view", None)
+                    st.session_state.pop("plan_error", None)
                 else:
-                    # Çözücü ve kısıtlar bilinçli olarak aynı bırakıldı.
                     enkazlar["h"] = [1 if random.random() < h_orani else 0 for _ in range(len(enkazlar))]
                     acik_enkazlar = enkazlar[enkazlar["h"] == 1]
+                    kapali_isimler = [str(isim) for isim in enkazlar.loc[enkazlar["h"] == 0, "isim"].tolist()]
                     if len(acik_enkazlar) == 0:
-                        sonuc = {
+                        st.session_state["son_atama"] = {
                             "level": "warning",
                             "mesaj": "Bu senaryoda tüm yollar kapalı (h=0)",
                             "satirlar": [],
-                            "kapali": [str(isim) for isim in enkazlar["isim"].tolist()],
+                            "kapali": kapali_isimler,
                         }
                     else:
-                        etkin_carpan = 1.0 / (1.0 + beta)
-                        prob = pulp.LpProblem("Ekip_Atama", pulp.LpMinimize)
-                        x = pulp.LpVariable.dicts(
-                            "atama",
-                            (
-                                (e["id"], z["id"])
-                                for _, e in ekipler.iterrows()
-                                for _, z in acik_enkazlar.iterrows()
-                            ),
-                            cat="Binary",
-                        )
-                        unmet = pulp.LpVariable.dicts("unmet", acik_enkazlar["id"].tolist(), lowBound=0)
-                        prob += pulp.lpSum(unmet[z["id"]] for _, z in acik_enkazlar.iterrows())
-                        for _, z in acik_enkazlar.iterrows():
-                            assigned_cap = pulp.lpSum(
-                                x[e["id"], z["id"]] * e["kapasite"] * etkin_carpan
-                                for _, e in ekipler.iterrows()
-                            )
-                            prob += unmet[z["id"]] >= z["talep"] - assigned_cap
-                        for _, e in ekipler.iterrows():
-                            prob += pulp.lpSum(x[e["id"], z["id"]] for _, z in acik_enkazlar.iterrows()) <= 1
-                        status = prob.solve(pulp.PULP_CBC_CMD(msg=0))
-                        if pulp.LpStatus[status] == "Optimal":
-                            pending = []
-                            for _, e in ekipler.iterrows():
-                                for _, z in acik_enkazlar.iterrows():
-                                    if pulp.value(x[e["id"], z["id"]]) > 0.5:
-                                        etkin_kap = e["kapasite"] * etkin_carpan
-                                        # Talep düşümü satırın orijinal talebinden hesaplanır.
-                                        yeni_talep = max(0, z["talep"] - etkin_kap)
-                                        pending.append(
-                                            {
-                                                "ekip_id": int(e["id"]),
-                                                "enkaz_id": int(z["id"]),
-                                                "baslangic": datetime.now().isoformat(),
-                                                "durum": "devam",
-                                                "ekip_isim": e["isim"],
-                                                "enkaz_isim": z["isim"],
-                                                "etkin_kap": float(etkin_kap),
-                                                "yeni_talep": float(yeni_talep),
-                                            }
-                                        )
-                            if pending:
-                                db.table("atamalar").insert(
-                                    [
-                                        {
-                                            "ekip_id": item["ekip_id"],
-                                            "enkaz_id": item["enkaz_id"],
-                                            "baslangic": item["baslangic"],
-                                            "durum": "devam",
-                                        }
-                                        for item in pending
-                                    ]
-                                ).execute()
-                            for item in pending:
-                                db.table("ekipler").update({"durum": "meşgul"}).eq("id", item["ekip_id"]).execute()
-                                db.table("enkazlar").update(
+                        team_rows = ekipler.to_dict("records")
+                        site_rows = acik_enkazlar.to_dict("records")
+                        result = solve_team_to_site(team_rows, site_rows, beta)
+                        if result.status == "Optimal":
+                            atanan = 0
+                            satirlar = []
+                            team_by_id = {team["id"]: team for team in team_rows}
+                            site_by_id = {site["id"]: site for site in site_rows}
+                            for assignment in result.assignments:
+                                team = team_by_id[assignment.ekip_id]
+                                site = site_by_id[assignment.enkaz_id]
+                                bas = datetime.now().isoformat()
+                                db.table("atamalar").insert({
+                                    "ekip_id": int(team["id"]),
+                                    "enkaz_id": int(site["id"]),
+                                    "baslangic": bas,
+                                    "durum": "devam",
+                                }).execute()
+                                db.table("ekipler").update({"durum": "meşgul"}).eq("id", int(team["id"])).execute()
+                                yeni_talep = max(0, site["talep"] - assignment.etkin_kapasite)
+                                db.table("enkazlar").update({
+                                    "talep": yeni_talep,
+                                    "durum": "tamam" if yeni_talep <= 0 else "aktif",
+                                }).eq("id", int(site["id"])).execute()
+                                atanan += 1
+                                satirlar.append(
                                     {
-                                        "talep": item["yeni_talep"],
-                                        "durum": "tamam" if item["yeni_talep"] <= 0 else "aktif",
+                                        "Ekip": f"{team['isim']} (#{int(team['id'])})",
+                                        "Enkaz": f"{site['isim']} (#{int(site['id'])})",
+                                        "Etkin kapasite (kişi)": round(float(assignment.etkin_kapasite), 1),
                                     }
-                                ).eq("id", item["enkaz_id"]).execute()
-                            kapali_isimler = [
-                                str(isim) for isim in enkazlar.loc[enkazlar["h"] == 0, "isim"].tolist()
-                            ]
-                            sonuc = {
+                                )
+                            st.session_state["son_atama"] = {
                                 "level": "success",
                                 "mesaj": (
-                                    f"{len(pending)} ekip atandı | β={beta} | "
+                                    f"{atanan} ekip atandı | β={beta} | "
                                     f"Kapalı yol: {len(enkazlar) - len(acik_enkazlar)} enkaz"
                                 ),
-                                "satirlar": [
-                                    {
-                                        "Ekip": f"{item['ekip_isim']} (#{item['ekip_id']})",
-                                        "Enkaz": f"{item['enkaz_isim']} (#{item['enkaz_id']})",
-                                        "Etkin kapasite (kişi)": round(item["etkin_kap"], 1),
-                                    }
-                                    for item in pending
-                                ],
+                                "satirlar": satirlar,
                                 "kapali": kapali_isimler,
                             }
                         else:
-                            sonuc = {
+                            st.session_state["son_atama"] = {
                                 "level": "error",
                                 "mesaj": "Model çözülemedi",
                                 "satirlar": [],
                                 "kapali": [],
                             }
-                st.session_state["son_atama"] = sonuc
+                    try:
+                        plan_instance = build_live_instance(
+                            enkazlar.to_dict("records"),
+                            ekipler.to_dict("records"),
+                        )
+                        plan_solution = solve_first_stage(plan_instance)
+                        if plan_solution.status != "Optimal":
+                            st.session_state["plan_error"] = f"Plan çözümü {plan_solution.status}"
+                            st.session_state.pop("plan_view", None)
+                        else:
+                            st.session_state["plan_view"] = plan_view(plan_instance, plan_solution)
+                            st.session_state.pop("plan_error", None)
+                    except Exception as exc:
+                        st.session_state["plan_error"] = str(exc)
+                        st.session_state.pop("plan_view", None)
                 refresh()
                 st.rerun()
             st.info("Not: h=0 olan enkazlara atama yapılmaz. β etkin kapasiteyi düşürür. Tamamlanmış atamalar korunur.")

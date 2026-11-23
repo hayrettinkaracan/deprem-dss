@@ -1,5 +1,7 @@
 streamlit
-pulp>=2.8,<3
+# 2.9: PULP_CBC_CMD ve LpVariable.dicts. PuLP 3+ bu adları kaldırdı.
+pulp==2.9.0
 pandas
 supabase
 python-dotenv
+pytest

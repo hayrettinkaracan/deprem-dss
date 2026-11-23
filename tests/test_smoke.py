@@ -205,6 +205,11 @@ class SmokeTests(unittest.TestCase):
             self.assertGreater(len(ozet), 0)
             self.assertTrue(ozet["Ekip"].str.contains("#").all())
             self.assertTrue(ozet["Enkaz"].str.contains("#").all())
+        basliklar = [el.value for el in at.subheader]
+        self.assertTrue(
+            any(baslik.startswith("Birinci aşama planı") for baslik in basliklar)
+            or any("Birinci aşama planı kurulamadı" in m for m in alerts(at))
+        )
 
 
 if __name__ == "__main__":
