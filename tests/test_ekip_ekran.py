@@ -107,8 +107,9 @@ class GorevMetinTests(unittest.TestCase):
             simdi=simdi,
         )
         sozluk = dict(satirlar)
-        self.assertEqual(sozluk["Durum"], "Devam ediyor")
-        self.assertEqual(sozluk["Enkaz"], "Avcılar-Merkez (#1)")
+        self.assertEqual(app.gorev_basligi(atama), "Görev: Avcılar-Merkez (#1)")
+        self.assertNotIn("Enkaz", sozluk)
+        self.assertNotIn("Durum", sozluk)
         self.assertEqual(sozluk["Talep"], "820.4 kişi")
         self.assertEqual(sozluk["İş makinesi gerekli"], "Evet")
         self.assertEqual(sozluk["Yardımcı kaynak"], "UMKE 2, iş makinesi 1")
@@ -131,8 +132,13 @@ class GorevMetinTests(unittest.TestCase):
         self.assertIn("48px", app.EKIP_TELEFON_CSS)
         self.assertIn("44px", app.EKIP_TELEFON_CSS)
         onay = app.ekip_onay_metni("Avcılar-Merkez")
-        self.assertIn("onaylayın", onay)
-        self.assertIn("Avcılar-Merkez", onay)
+        self.assertEqual(
+            onay,
+            "Bu ekibin Avcılar-Merkez görevi biter ve ekip müsait olur. "
+            "Aynı enkazdaki diğer ekipler çalışmaya devam eder.",
+        )
+        self.assertNotIn("kapanır", onay)
+        self.assertNotIn("durur", onay)
         bitti = app.ekip_bitti_metni(
             "AK-1", 1, "Avcılar-Merkez", "23.11.2026 06:30", "24.11.2026 12:00"
         )
@@ -176,7 +182,9 @@ class EkipEkranTests(unittest.TestCase):
         at = ekip_giris(self.app(), 1, "ekip-1")
         assert_clean(self, at)
         govde = html_metin(at)
-        self.assertIn("Avcılar-Merkez (#1)", govde)
+        self.assertTrue(any(el.value == "Görev: Avcılar-Merkez (#1)" for el in at.subheader))
+        self.assertIn("AK-1 (#1)", govde)
+        self.assertIn("Meşgul", govde)
         self.assertIn("820.4 kişi", govde)
         self.assertIn("İş makinesi gerekli", govde)
         self.assertIn("Evet", govde)
@@ -184,13 +192,15 @@ class EkipEkranTests(unittest.TestCase):
         self.assertIn("23.11.2026 06:30", govde)
         self.assertIn("Geçen süre", govde)
         self.assertNotIn("Geçen süre:</strong> —", govde)
-        self.assertIn("Devam ediyor", govde)
         self.assertIn("40.97920° K, 28.72140° D", govde)
-        self.assertIn('href="geo:40.979200,28.721400"', govde)
-        self.assertEqual(
-            at.link_button(key="harita_google").proto.url,
-            "https://www.google.com/maps/search/?api=1&query=40.979200,28.721400",
+        self.assertIn("Google Haritalar", govde)
+        self.assertIn("Harita uygulaması", govde)
+        self.assertIn(
+            'href="https://www.google.com/maps/search/?api=1&amp;query=40.979200,28.721400"',
+            govde,
         )
+        self.assertIn('href="geo:40.979200,28.721400"', govde)
+        self.assertEqual(len(at.link_button), 0)
         self.assertEqual(len(at.dataframe), 0)
         self.assertEqual(len(at.tabs), 0)
         self.assertIn("48px", govde)
@@ -198,7 +208,9 @@ class EkipEkranTests(unittest.TestCase):
         at.button(key="gorev_bitti").click().run()
         assert_clean(self, at)
         self.assertEqual(db.table("atamalar").select("*").eq("id", 1).execute().data[0]["durum"], "devam")
-        self.assertTrue(any("onaylayın" in m and "Avcılar-Merkez" in m for m in alerts(at)))
+        self.assertTrue(any("görevi biter" in m and "Avcılar-Merkez" in m for m in alerts(at)))
+        self.assertTrue(any("çalışmaya devam eder" in m for m in alerts(at)))
+        self.assertFalse(any("kapanır" in m or "durur" in m for m in alerts(at)))
         self.assertTrue(any(w.key == "gorev_bitti_vazgec" for w in at.button))
         self.assertTrue(any(w.key == "gorev_bitti_onay" for w in at.button))
         self.assertFalse(any(w.key == "gorev_bitti" for w in at.button))
@@ -207,7 +219,7 @@ class EkipEkranTests(unittest.TestCase):
         assert_clean(self, at)
         self.assertEqual(db.table("atamalar").select("*").eq("id", 1).execute().data[0]["durum"], "devam")
         self.assertTrue(any(w.key == "gorev_bitti" for w in at.button))
-        self.assertFalse(any("onaylayın" in m for m in alerts(at)))
+        self.assertFalse(any("görevi biter" in m for m in alerts(at)))
         at.button(key="gorev_bitti").click().run()
         at.button(key="gorev_bitti_onay").click().run()
         assert_clean(self, at)
@@ -265,8 +277,8 @@ class EkipEkranTests(unittest.TestCase):
         at.session_state["memory_db"] = MemorySupabase()
         at.button(key="ekip_yeniden").click().run()
         assert_clean(self, at)
-        self.assertIn("Avcılar-Merkez", html_metin(at))
-        self.assertIn("Devam ediyor", html_metin(at))
+        self.assertTrue(any(el.value == "Görev: Avcılar-Merkez (#1)" for el in at.subheader))
+        self.assertIn("820.4 kişi", html_metin(at))
         self.assertFalse(any(m == app.EKIP_BAGLANTI for m in alerts(at)))
         self.assertFalse(any(w.key == "ekip_yeniden" for w in at.button))
 
