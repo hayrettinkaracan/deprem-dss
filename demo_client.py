@@ -214,6 +214,7 @@ class MemorySupabase:
             ],
             "yardimci_kaynaklar": [
                 {"id": 1, "enkaz_id": 2, "umke_sayisi": 4, "makine_sayisi": 1},
+                {"id": 2, "enkaz_id": 1, "umke_sayisi": 2, "makine_sayisi": 1},
             ],
         }
         for name, rows in seed.items():

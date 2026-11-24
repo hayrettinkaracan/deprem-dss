@@ -21,13 +21,13 @@ Bu mod `demo_client.py` içindeki bellek istemcisini kullanır. Sayfanın üstü
 
 ## Roller
 
-Kenar çubuğundaki rol seçimi tek başına yetki vermez.
+Rol seçimi tek başına yetki vermez. Rol ve Çıkış ana alandadır. Ekip akışı kenar çubuğuna bağlı değildir; ekip ekranı `layout="wide"` kullanmaz.
 
-Admin parolası `ADMIN_PASSWORD` değeridir. Önce `.streamlit/secrets.toml` (Streamlit Cloud'da Secrets), yoksa ortam değişkeni okunur. Karşılaştırma `hmac.compare_digest` ile yapılır. Oturum bellekte tutulur; kenar çubuğundaki Çıkış oturumu siler.
+Admin parolası `ADMIN_PASSWORD` değeridir. Önce `.streamlit/secrets.toml` (Streamlit Cloud'da Secrets), yoksa ortam değişkeni okunur. Karşılaştırma `hmac.compare_digest` ile yapılır. Oturum bellekte tutulur; Çıkış oturumu siler.
 
 Parola tanımlı değilse ve uygulama deneme modunda değilse Admin paneli açılmaz. Ekranda dosyaya veya ortam değişkenine nasıl yazılacağı gösterilir. Deneme modunda parola tanımlı değilse yönetici parolası `demo` olur ve giriş formunda yazılır. `ADMIN_PASSWORD` tanımlıysa deneme modunda da o parola geçerlidir.
 
-Ekip, kaydını ve erişim kodunu girerek oturum açar. Kod `ekipler.erisim_kodu` sütunundadır. Yönetici ekip oluştururken kodu yazar ve tabloda görür. Kod boşsa o ekip giriş yapamaz. Girişten sonra ekip yalnızca kendi devam eden görevini görür ve yalnızca onu kapatabilir.
+Ekip, kaydını ve erişim kodunu girerek oturum açar. Kod `ekipler.erisim_kodu` sütunundadır. Yönetici ekip oluştururken kodu yazar ve tabloda görür. Kod boşsa o ekip giriş yapamaz. Girişten sonra tek ekran vardır: enkaz adı, talep (kişi), iş makinesi gerekli mi, atanmış UMKE ve iş makinesi, başlangıç (`gg.aa.yyyy ss:dd`) ve geçen süre, harita bağlantısı. «Görevim Bitti» önce onay ister. Görev yoksa «Henüz görev yok, müsaitsiniz» yazılır. Bağlantı hatasında yığın izi yerine «Yeniden dene» gösterilir.
 
 Eski Supabase projesine sütun eklemek için `supabase_schema.sql` içindeki şu satır yeterlidir:
 
@@ -62,5 +62,5 @@ python3 -m pytest -q
 ## Özellikler
 
 - Admin: parola sonrası enkaz ve ekip girişi, Avcılar örnek verisi, operasyonel atama, birinci aşama planı, durum
-- Ekip: kendi koduyla giriş, kendi görevini görme ve bitirme
+- Ekip: kendi koduyla giriş, telefonda tek ekranda kendi görevini görme ve onaydan sonra bitirme
 - Tamamlanan atamalar yeniden planlamada silinmez
