@@ -31,12 +31,22 @@ def frame_with(at, column):
     raise AssertionError(f"{column} sütunu yok")
 
 
+def admin_giris(at, parola="demo"):
+    at.text_input(key="admin_parola").set_value(parola)
+    return at.button(key="admin_giris").click().run()
+
+
 class SmokeTests(unittest.TestCase):
     def setUp(self):
+        self._eski_parola = os.environ.pop("ADMIN_PASSWORD", None)
         os.environ["DEPREM_DEMO"] = "1"
 
     def tearDown(self):
         os.environ.pop("DEPREM_DEMO", None)
+        if self._eski_parola is None:
+            os.environ.pop("ADMIN_PASSWORD", None)
+        else:
+            os.environ["ADMIN_PASSWORD"] = self._eski_parola
 
     def app(self):
         return AppTest.from_file(APP, default_timeout=30).run()
@@ -51,7 +61,7 @@ class SmokeTests(unittest.TestCase):
         self.assertFalse(any(el.value == "Admin Paneli" for el in at.header))
 
     def test_admin_sayfalari(self):
-        at = self.app()
+        at = admin_giris(self.app())
         assert_clean(self, at)
         self.assertTrue(any("kaydedilmez" in m for m in alerts(at)))
         self.assertTrue(any(el.value == "Admin Paneli" for el in at.header))
@@ -84,7 +94,7 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("kişi", at.number_input(key="enkaz_talep").help.lower())
 
     def test_onbellek_ikinci_okumayi_atlar(self):
-        at = self.app()
+        at = admin_giris(self.app())
         assert_clean(self, at)
         ilk = at.session_state["memory_db"].select_count
         self.assertGreater(ilk, 0)
@@ -93,7 +103,7 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(at.session_state["memory_db"].select_count, ilk)
 
     def test_bos_isim_ve_talep_hata_mesaji(self):
-        at = self.app()
+        at = admin_giris(self.app())
         once = len(frame_with(at, "Talep (kişi)"))
         at.button(key="enkaz_ekle").click().run()
         assert_clean(self, at)
@@ -110,7 +120,7 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(len(frame_with(at, "Talep (kişi)")), once)
 
     def test_enkaz_eklenince_mesaj_kalir(self):
-        at = self.app()
+        at = admin_giris(self.app())
         at.text_input(key="enkaz_isim").set_value("Testköy")
         at.button(key="enkaz_ekle").click().run()
         assert_clean(self, at)
@@ -118,7 +128,7 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("Testköy", set(frame_with(at, "Talep (kişi)")["İsim"]))
 
     def test_silme_onay_istemeden_silmez(self):
-        at = self.app()
+        at = admin_giris(self.app())
         at.button(key="avcilar_sil_iste").click().run()
         assert_clean(self, at)
         self.assertTrue(any("geri alınamaz" in m for m in alerts(at)))
@@ -140,21 +150,32 @@ class SmokeTests(unittest.TestCase):
 
     def test_ekip_id_ile_secilir_ve_mesaj_kalir(self):
         at = self.app()
-        at.selectbox(key="rol").set_value("Ekip").run()
+        at = at.selectbox(key="rol").set_value("Ekip").run()
         assert_clean(self, at)
         self.assertTrue(any(el.value == "Ekip Paneli" for el in at.header))
-        kutu = at.selectbox(key="ekip_sec")
+        self.assertFalse(any("Aktif görev" in m for m in alerts(at)))
+        kutu = at.selectbox(key="ekip_giris_sec")
         self.assertIsInstance(kutu.value, int)
         ak1 = [etiket for etiket in kutu.options if etiket.startswith("AK-1")]
         self.assertGreaterEqual(len(ak1), 2)
         self.assertEqual(len(ak1), len(set(ak1)))
         self.assertTrue(all("#" in etiket for etiket in ak1))
+        at.text_input(key="ekip_giris_kod").set_value("ekip-1")
+        at = at.button(key="ekip_giris").click().run()
+        assert_clean(self, at)
         self.assertTrue(any("Aktif görev" in m and "(#1)" in m for m in alerts(at)))
-        kutu.set_value(2).run()
+        self.assertFalse(any(w.key == "ekip_giris_sec" for w in at.selectbox))
+        at = at.button(key="cikis").click().run()
+        at.selectbox(key="ekip_giris_sec").set_value(2)
+        at.text_input(key="ekip_giris_kod").set_value("ekip-2")
+        at = at.button(key="ekip_giris").click().run()
         assert_clean(self, at)
         self.assertTrue(any("aktif görevin yok" in m for m in alerts(at)))
         self.assertFalse(any("Aktif görev" in m for m in alerts(at)))
-        at.selectbox(key="ekip_sec").set_value(1).run()
+        at = at.button(key="cikis").click().run()
+        at.selectbox(key="ekip_giris_sec").set_value(1)
+        at.text_input(key="ekip_giris_kod").set_value("ekip-1")
+        at = at.button(key="ekip_giris").click().run()
         at.button(key="gorev_bitti").click().run()
         assert_clean(self, at)
         self.assertTrue(any("Görev tamamlandı" in m and "(#1)" in m for m in alerts(at)))
@@ -162,7 +183,7 @@ class SmokeTests(unittest.TestCase):
         self.assertTrue(any("aktif görevin yok" in m for m in alerts(at)))
 
     def test_ayni_isimli_enkaza_yardimci_kaynak(self):
-        at = self.app()
+        at = admin_giris(self.app())
         kutu = at.selectbox(key="yardimci_enkaz")
         self.assertIsInstance(kutu.value, int)
         etiketler = [etiket for etiket in kutu.options if "Avcılar-Merkez" in etiket]
@@ -178,7 +199,7 @@ class SmokeTests(unittest.TestCase):
         self.assertIn(9, set(yardim["UMKE"]))
 
     def test_atama_ozeti_rerun_sonrasi_durur(self):
-        at = self.app()
+        at = admin_giris(self.app())
         at.button(key="atama_calistir").click().run(timeout=60)
         assert_clean(self, at)
         def sonuc_metinleri(agac):

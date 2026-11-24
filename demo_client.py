@@ -169,9 +169,30 @@ class MemorySupabase:
                 },
             ],
             "ekipler": [
-                {"id": 1, "isim": "AK-1", "tip": "Arama-Kurtarma", "kapasite": 120, "durum": "meşgul"},
-                {"id": 2, "isim": "AK-1", "tip": "Arama-Kurtarma", "kapasite": 80, "durum": "musait"},
-                {"id": 3, "isim": "AK-3", "tip": "Arama-Kurtarma", "kapasite": 100, "durum": "musait"},
+                {
+                    "id": 1,
+                    "isim": "AK-1",
+                    "tip": "Arama-Kurtarma",
+                    "kapasite": 120,
+                    "durum": "meşgul",
+                    "erisim_kodu": "ekip-1",
+                },
+                {
+                    "id": 2,
+                    "isim": "AK-1",
+                    "tip": "Arama-Kurtarma",
+                    "kapasite": 80,
+                    "durum": "musait",
+                    "erisim_kodu": "ekip-2",
+                },
+                {
+                    "id": 3,
+                    "isim": "AK-3",
+                    "tip": "Arama-Kurtarma",
+                    "kapasite": 100,
+                    "durum": "musait",
+                    "erisim_kodu": "ekip-3",
+                },
             ],
             "atamalar": [
                 {

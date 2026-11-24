@@ -1,13 +1,17 @@
 """Marmara deprem kaynak atama karar destek arayüzü.
 
 Supabase kimlik bilgisi varsa o istemci kullanılır. Anahtar yokken bellek içi
-deneme yalnızca DEPREM_DEMO=1 ile açılır.
+deneme yalnızca DEPREM_DEMO=1 ile açılır. Admin ADMIN_PASSWORD ister; ekip
+kendi erişim koduyla girer.
 """
 
 import copy
+import hashlib
+import hmac
 import math
 import os
 import random
+import time
 from datetime import datetime
 
 import pandas as pd
@@ -22,6 +26,24 @@ from model.routing import CHAIN_CAPTION, chain_rows, solve_team_chains
 READ_CACHE_TTL_SECONDS = 20
 TALEP_UST_SINIR = 1_000_000
 KAPASITE_UST_SINIR = 100_000
+KOD_UST_SINIR = 80
+DEMO_ADMIN_PAROLA = "demo"
+GIRIS_GECIKME_SANIYE = 0.25
+GIRIS_GECIKME_TAVAN = 1.5
+ADMIN_PAROLA_YOK = (
+    "Yönetici girişi kapalı: ADMIN_PASSWORD tanımlı değil. "
+    ".streamlit/secrets.toml dosyasına ADMIN_PASSWORD = \"...\" yazın "
+    "veya ortam değişkeni ADMIN_PASSWORD ayarlayın. Örnek: secrets.toml.example. "
+    "Parola tanımlanmadan Admin paneli açılmaz."
+)
+EKIP_GIRIS_MESAJ = {
+    "tanimli_degil": (
+        "Bu ekip için erişim kodu tanımlı değil. Yönetici ekip eklerken kod yazmalıdır."
+    ),
+    "bos": "Erişim kodu zorunludur.",
+    "hatali": "Erişim kodu hatalı.",
+    "yok": "Ekip kaydı bulunamadı.",
+}
 AVCILAR_MAHALLELER = [
     "Cihangir",
     "Yeşilkent",
@@ -109,7 +131,7 @@ def enkaz_hatalari(isim, enlem, boylam, talep):
     return hatalar
 
 
-def ekip_hatalari(isim, kapasite):
+def ekip_hatalari(isim, kapasite, erisim_kodu=""):
     hatalar = []
     temiz = "" if isim is None else str(isim).strip()
     if not temiz:
@@ -125,7 +147,186 @@ def ekip_hatalari(isim, kapasite):
         hatalar.append("Kapasite 0'dan büyük olmalıdır.")
     elif kapasite_f > KAPASITE_UST_SINIR:
         hatalar.append("Kapasite 100.000 kişiyi aşamaz.")
+    kod = "" if erisim_kodu is None else str(erisim_kodu).strip()
+    if len(kod) > KOD_UST_SINIR:
+        hatalar.append("Erişim kodu en fazla 80 karakter olabilir.")
     return hatalar
+
+
+def yonetici_parolasi(secret, env, demo):
+    """(parola, deneme_varsayilani).
+
+    secret, sonra ortam. İkisi de boşsa ve demo değilse parola yoktur;
+    Admin paneli açılmaz. İkisi de boşsa ve demo ise belgelenmiş deneme parolası geçerlidir.
+    """
+    for raw in (secret, env):
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if text:
+            return text, False
+    if demo:
+        return DEMO_ADMIN_PAROLA, True
+    return None, False
+
+
+def parola_eslesir(girilen, beklenen):
+    """Sabit süreli karşılaştırma. Boş değer eşleşmez."""
+    if girilen is None or beklenen is None:
+        return False
+    girilen_s = str(girilen).strip()
+    beklenen_s = str(beklenen).strip()
+    if not girilen_s or not beklenen_s:
+        return False
+    return hmac.compare_digest(
+        hashlib.sha256(girilen_s.encode("utf-8")).digest(),
+        hashlib.sha256(beklenen_s.encode("utf-8")).digest(),
+    )
+
+
+def ekip_kodu_sonucu(ekip, girilen):
+    """'tamam', 'bos', 'hatali', 'tanimli_degil' veya 'yok'."""
+    if not ekip:
+        return "yok"
+    kayitli = ekip.get("erisim_kodu")
+    if kayitli is None or str(kayitli).strip() == "":
+        return "tanimli_degil"
+    if girilen is None or str(girilen).strip() == "":
+        return "bos"
+    if parola_eslesir(girilen, kayitli):
+        return "tamam"
+    return "hatali"
+
+
+def atama_ekibe_ait(atama, ekip_id):
+    try:
+        return int(atama.get("ekip_id")) == int(ekip_id)
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def gorevi_bitir(db, oturum_ekip_id, atama_id, simdi=None):
+    """Yalnızca oturumdaki ekibin devam eden görevini kapatır. Değilse None."""
+    try:
+        oturum_id = int(oturum_ekip_id)
+        atama_int = int(atama_id)
+    except (TypeError, ValueError):
+        return None
+    rows = run_select(
+        db,
+        "atamalar",
+        "*",
+        (("eq", "id", atama_int), ("eq", "durum", "devam")),
+    )
+    if len(rows) != 1 or not atama_ekibe_ait(rows[0], oturum_id):
+        return None
+    bit = simdi or datetime.now().isoformat()
+    db.table("atamalar").update({"durum": "bitti", "bitis": bit}).eq("id", atama_int).eq(
+        "ekip_id", oturum_id
+    ).execute()
+    db.table("ekipler").update({"durum": "musait"}).eq("id", oturum_id).execute()
+    return bit
+
+
+def modelsiz_ekip(rows):
+    """Erişim kodunu optimizasyon girdisine koyma."""
+    temiz = []
+    for row in rows:
+        item = dict(row)
+        item.pop("erisim_kodu", None)
+        temiz.append(item)
+    return temiz
+
+
+def demo_ekip_kod_notu(ekipler):
+    satirlar = []
+    for row in ekipler:
+        kod = "" if row.get("erisim_kodu") is None else str(row.get("erisim_kodu")).strip()
+        if not kod:
+            continue
+        satirlar.append(f"{row.get('isim', '—')} (#{int(row['id'])}): {kod}")
+    if not satirlar:
+        return None
+    return "Deneme ekip kodları: " + ", ".join(satirlar) + "."
+
+
+def secret_degeri(name):
+    try:
+        return st.secrets[name]
+    except (KeyError, FileNotFoundError):
+        return None
+
+
+def kayit_basarisiz_giris():
+    adet = int(st.session_state.get("giris_hata", 0)) + 1
+    st.session_state["giris_hata"] = adet
+    time.sleep(min(GIRIS_GECIKME_SANIYE * adet, GIRIS_GECIKME_TAVAN))
+
+
+def _admin_giris(parola, deneme_varsayilani):
+    st.subheader("Yönetici girişi")
+    if parola is None:
+        st.error(ADMIN_PAROLA_YOK)
+        return
+    if deneme_varsayilani:
+        st.info(
+            f"Deneme modu. Yönetici parolası: {DEMO_ADMIN_PAROLA}. "
+            "Kalıcı kurulumda bu parola geçersizdir; .streamlit/secrets.toml dosyasına "
+            "ADMIN_PASSWORD yazın veya aynı adlı ortam değişkenini ayarlayın."
+        )
+    with st.form("admin_giris_form"):
+        girilen = st.text_input(
+            "Yönetici parolası",
+            key="admin_parola",
+            type="password",
+            autocomplete="current-password",
+            help="ADMIN_PASSWORD değeri. Deneme modunda parola tanımlı değilse formun üstünde yazılır.",
+        )
+        if st.form_submit_button("Giriş", key="admin_giris"):
+            if girilen is None or not str(girilen).strip():
+                st.error("Parola zorunludur.")
+            elif parola_eslesir(girilen, parola):
+                st.session_state["auth"] = {"rol": "Admin"}
+                st.session_state["giris_hata"] = 0
+                st.rerun()
+            else:
+                kayit_basarisiz_giris()
+                st.error("Parola hatalı.")
+
+
+def _ekip_giris(ekipler, demo):
+    st.header("Ekip Paneli")
+    st.subheader("Ekip girişi")
+    if not ekipler:
+        st.warning("Henüz ekip yok.")
+        return
+    if demo:
+        notu = demo_ekip_kod_notu(ekipler)
+        if notu:
+            st.info(notu)
+    with st.form("ekip_giris_form"):
+        ekip_id, by_id = select_kayit(
+            "Ekip",
+            ekipler,
+            key="ekip_giris_sec",
+            help_text="Kayıt numarası (#) kimliktir. Aynı isimli ekiplerden kodu girilen kayıt açılır.",
+        )
+        kod = st.text_input(
+            "Erişim kodu",
+            key="ekip_giris_kod",
+            type="password",
+            autocomplete="off",
+            help="Yöneticinin bu ekibe verdiği kod. Başka ekibin kodu bu kaydı açmaz.",
+        )
+        if st.form_submit_button("Giriş", key="ekip_giris"):
+            sonuc = ekip_kodu_sonucu(by_id.get(int(ekip_id)), kod)
+            if sonuc == "tamam":
+                st.session_state["auth"] = {"rol": "Ekip", "ekip_id": int(ekip_id)}
+                st.session_state["giris_hata"] = 0
+                st.rerun()
+            if sonuc == "hatali":
+                kayit_basarisiz_giris()
+            st.error(EKIP_GIRIS_MESAJ[sonuc])
 
 
 def kayit_etiketi(row):
@@ -283,17 +484,34 @@ def show_enkaz_haritasi(rows):
     )
 
 
+def kod_metni(value):
+    if value is None:
+        return "—"
+    try:
+        if pd.isna(value):
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return text or "—"
+
+
 def show_ekip_tablosu(rows):
     if not rows:
         st.info("Kayıtlı ekip yok.")
         return
     frame = pd.DataFrame(rows)
+    if "erisim_kodu" in frame.columns:
+        kodlar = frame["erisim_kodu"].map(kod_metni)
+    else:
+        kodlar = ["—"] * len(frame)
     view = pd.DataFrame(
         {
             "İsim": frame["isim"],
             "Tip": frame["tip"],
             "Kapasite (kişi)": pd.to_numeric(frame["kapasite"], errors="coerce"),
             "Durum": frame["durum"].map(etiket_durum),
+            "Erişim kodu": kodlar,
         }
     )
     st.dataframe(
@@ -304,6 +522,10 @@ def show_ekip_tablosu(rows):
             "Tip": st.column_config.TextColumn("Tip"),
             "Kapasite (kişi)": st.column_config.NumberColumn("Kapasite (kişi)", format="%.1f"),
             "Durum": st.column_config.TextColumn("Durum"),
+            "Erişim kodu": st.column_config.TextColumn(
+                "Erişim kodu",
+                help="Ekip bu kodla panele girer. Yalnızca yönetici oturumunda görünür.",
+            ),
         },
     )
 
@@ -515,10 +737,31 @@ def main():
         "Rol",
         ["Admin", "Ekip"],
         key="rol",
-        help="Admin enkaz, ekip ve atamayı yönetir. Ekip yalnızca seçtiği görevi görür ve bitirir.",
+        help="Admin parola ister. Ekip, kendi kaydını ve erişim kodunu girer; yalnızca kendi görevini görür.",
+    )
+    auth = st.session_state.get("auth")
+    if auth is not None and not isinstance(auth, dict):
+        st.session_state.pop("auth", None)
+        auth = None
+    giris_tamam = isinstance(auth, dict) and auth.get("rol") == rol
+    if isinstance(auth, dict) and st.sidebar.button(
+        "Çıkış",
+        key="cikis",
+        help="Oturumu kapatır. Panele dönmek için parola veya ekip kodu gerekir.",
+    ):
+        st.session_state.pop("auth", None)
+        st.rerun()
+    parola, deneme_varsayilani = yonetici_parolasi(
+        secret_degeri("ADMIN_PASSWORD"),
+        os.environ.get("ADMIN_PASSWORD"),
+        getattr(db, "is_memory", False),
     )
 
-    if rol == "Admin":
+    if rol == "Admin" and not giris_tamam:
+        _admin_giris(parola, deneme_varsayilani)
+    elif rol == "Ekip" and not giris_tamam:
+        _ekip_giris(fetch("ekipler", "*"), getattr(db, "is_memory", False))
+    elif rol == "Admin":
         st.header("Admin Paneli")
         render_son_atama()
         render_birinci_asama()
@@ -656,22 +899,42 @@ def main():
                     format="%.1f",
                     help="Ekibin karşılayabileceği kişi sayısı. 0'dan büyük, en fazla 100.000. β etkin kapasiteyi kapasite / (1+β) olacak şekilde düşürür.",
                 )
+                erisim_kodu = st.text_input(
+                    "Erişim kodu",
+                    key="ekip_kod",
+                    max_chars=KOD_UST_SINIR,
+                    autocomplete="off",
+                    help="Ekibin panele girerken yazacağı kod. Boş bırakılırsa bu ekip giriş yapamaz. Kod aşağıdaki tabloda görünür.",
+                )
                 if st.form_submit_button("Ekip ekle", key="ekip_ekle"):
-                    hatalar = ekip_hatalari(ekip_isim, kapasite)
+                    hatalar = ekip_hatalari(ekip_isim, kapasite, erisim_kodu)
                     if hatalar:
                         _hatalari_goster(hatalar)
                     else:
-                        db.table("ekipler").insert(
-                            {
-                                "isim": ekip_isim.strip(),
-                                "tip": "Arama-Kurtarma",
-                                "kapasite": float(kapasite),
-                                "durum": "musait",
-                            }
-                        ).execute()
-                        refresh()
-                        flash("success", "Arama-Kurtarma ekibi eklendi")
-                        st.rerun()
+                        payload = {
+                            "isim": ekip_isim.strip(),
+                            "tip": "Arama-Kurtarma",
+                            "kapasite": float(kapasite),
+                            "durum": "musait",
+                        }
+                        kod = "" if erisim_kodu is None else str(erisim_kodu).strip()
+                        # Sütun eski şemada yokken kod boşsa kayıt eskisi gibi yazılır.
+                        if kod:
+                            payload["erisim_kodu"] = kod
+                        try:
+                            db.table("ekipler").insert(payload).execute()
+                        except Exception as exc:
+                            if "erisim_kodu" in str(exc).lower():
+                                st.error(
+                                    "Erişim kodu kaydedilemedi. supabase_schema.sql içindeki "
+                                    "ekipler.erisim_kodu sütununu ekleyin."
+                                )
+                            else:
+                                raise
+                        else:
+                            refresh()
+                            flash("success", "Arama-Kurtarma ekibi eklendi")
+                            st.rerun()
             st.info(
                 "UMKE ve iş makinesi bireysel ekip olarak atanmaz. Enkaz bazlı yardımcı kaynak havuzu olarak yönetilir."
             )
@@ -735,7 +998,7 @@ def main():
                             "kapali": kapali_isimler,
                         }
                     else:
-                        team_rows = ekipler.to_dict("records")
+                        team_rows = modelsiz_ekip(ekipler.to_dict("records"))
                         site_rows = acik_enkazlar.to_dict("records")
                         result = solve_team_to_site(team_rows, site_rows, beta)
                         if result.status == "Optimal":
@@ -786,7 +1049,7 @@ def main():
                     try:
                         plan_instance = build_live_instance(
                             enkazlar.to_dict("records"),
-                            ekipler.to_dict("records"),
+                            modelsiz_ekip(ekipler.to_dict("records")),
                         )
                         plan_solution = solve_first_stage(plan_instance)
                         if plan_solution.status != "Optimal":
@@ -864,53 +1127,58 @@ def main():
                 st.info("Aktif enkaz yok.")
     else:
         st.header("Ekip Paneli")
-        ekipler = fetch("ekipler", "*")
-        if ekipler:
-            ekip_id, by_id = select_kayit(
-                "Ekibini seç",
-                ekipler,
-                key="ekip_sec",
-                help_text="Kayıt numarası (#) kimliktir. Aynı isimli ekiplerden yalnızca seçilen kapanır.",
-            )
-            atama = fetch(
-                "atamalar",
-                GOREV_SELECT,
-                (("eq", "ekip_id", int(ekip_id)), ("eq", "durum", "devam")),
-            )
-            if atama:
-                gorev = atama[0]
-                enkaz = gorev.get("enkazlar") or {}
-                talep = enkaz.get("talep")
-                talep_txt = "—" if talep is None else f"{float(talep):.1f}"
-                enkaz_adi = enkaz.get("isim") or "—"
-                bas_txt = format_dt(gorev.get("baslangic"))
-                st.success(
-                    f"Aktif görev: {enkaz_adi} (#{gorev.get('enkaz_id')}). "
-                    f"Kalan talep {talep_txt} kişi. Başlangıç {bas_txt}."
-                )
-                if st.button(
-                    "Görevim Bitti",
-                    key="gorev_bitti",
-                    help="Seçili ekibin devam eden görevini bitirir ve ekibi müsait yapar. Aynı enkazdaki diğer ekipler durur.",
-                ):
-                    bit = datetime.now().isoformat()
-                    db.table("atamalar").update({"durum": "bitti", "bitis": bit}).eq("id", gorev["id"]).execute()
-                    db.table("ekipler").update({"durum": "musait"}).eq("id", int(ekip_id)).execute()
-                    refresh()
-                    secilen = by_id[int(ekip_id)]
-                    flash(
-                        "success",
-                        (
-                            f"Görev tamamlandı: {secilen['isim']} (#{int(ekip_id)}) → {enkaz_adi}. "
-                            f"Başlangıç {bas_txt}, bitiş {format_dt(bit)}."
-                        ),
-                    )
-                    flash("info", "Diğer ekipler aynı enkazda devam edebilir.")
-                    st.rerun()
-            else:
-                st.info("Şu an aktif görevin yok. Müsait durumdasın.")
+        try:
+            ekip_id = int(auth["ekip_id"])
+        except (KeyError, TypeError, ValueError):
+            st.error("Oturum geçersiz. Çıkış yapıp yeniden girin.")
         else:
-            st.warning("Henüz ekip yok.")
+            bulunan = fetch("ekipler", "id, isim, durum", (("eq", "id", ekip_id),))
+            if not bulunan:
+                st.warning("Ekip kaydı bulunamadı. Çıkış yapıp yeniden girin.")
+            else:
+                secilen = bulunan[0]
+                st.caption(f"Oturum: {kayit_etiketi(secilen)}")
+                atama = [
+                    row
+                    for row in fetch(
+                        "atamalar",
+                        GOREV_SELECT,
+                        (("eq", "ekip_id", ekip_id), ("eq", "durum", "devam")),
+                    )
+                    if atama_ekibe_ait(row, ekip_id)
+                ]
+                if atama:
+                    gorev = atama[0]
+                    enkaz = gorev.get("enkazlar") or {}
+                    talep = enkaz.get("talep")
+                    talep_txt = "—" if talep is None else f"{float(talep):.1f}"
+                    enkaz_adi = enkaz.get("isim") or "—"
+                    bas_txt = format_dt(gorev.get("baslangic"))
+                    st.success(
+                        f"Aktif görev: {enkaz_adi} (#{gorev.get('enkaz_id')}). "
+                        f"Kalan talep {talep_txt} kişi. Başlangıç {bas_txt}."
+                    )
+                    if st.button(
+                        "Görevim Bitti",
+                        key="gorev_bitti",
+                        help="Yalnızca bu ekibin devam eden görevini bitirir ve ekibi müsait yapar. Aynı enkazdaki diğer ekipler durur.",
+                    ):
+                        bit = gorevi_bitir(db, ekip_id, gorev["id"])
+                        if bit is None:
+                            st.error("Bu görev size ait değil veya zaten kapanmış.")
+                        else:
+                            refresh()
+                            flash(
+                                "success",
+                                (
+                                    f"Görev tamamlandı: {secilen['isim']} (#{ekip_id}) → {enkaz_adi}. "
+                                    f"Başlangıç {bas_txt}, bitiş {format_dt(bit)}."
+                                ),
+                            )
+                            flash("info", "Diğer ekipler aynı enkazda devam edebilir.")
+                            st.rerun()
+                else:
+                    st.info("Şu an aktif görevin yok. Müsait durumdasın.")
 
 
 if __name__ == "__main__":
