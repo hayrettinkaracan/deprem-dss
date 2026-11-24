@@ -40,8 +40,15 @@ Kod boş bırakılan ekip kaydı, sütun henüz yokken de yazılır. Bu kontrol 
 Deneme ekipleri: AK-1 (#1) `ekip-1`, AK-1 (#2) `ekip-2`, AK-3 (#3) `ekip-3`. Kodlar deneme giriş formunda da listelenir.
 
 ## Model (1/11)
+## Model
 
-Birinci aşama kararları `model/` paketindedir ve rapor (4.4)–(4.10) ile Çizelge 5.1'e göredir: `G_j`, `V_{j,k}`, `V^U_j`, `V^W_j`. Paket Streamlit ve Supabase import etmez. "Atama Çalıştır" sekmesi bu planı gösterir; Supabase'e yazılan operasyonel atama seçilen tek senaryo için eskisi gibi kalır.
+Paket `model/` Streamlit ve Supabase import etmez.
+
+- 1/11: birinci aşama (4.4)–(4.10), `solve_first_stage`.
+- 2/11: bireysel ekip zinciri (4.18)–(4.23), `solve_team_chains`.
+- 3/11: \(T=\{1..36\}\), \(L=2\), \(H=72\). Periyot aşan yol (4.1), (4.24)–(4.33), (4.36)–(4.39). İş hâlâ giriş başına \(L\) saattir.
+
+"Atama Çalıştır" her iki sonucu da gösterir. Supabase'e yazılan operasyonel atama seçilen tek senaryo için eskisi gibi kalır.
 
 PuLP 2.9 kullanılır. PuLP 3+ `PULP_CBC_CMD` ve `LpVariable.dicts` adlarını kaldırdı.
 
