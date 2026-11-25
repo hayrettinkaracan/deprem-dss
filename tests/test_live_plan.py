@@ -9,6 +9,7 @@ from model.live_plan import (
     calistir_plan,
     gorunum,
     guvenli_hata,
+    kaynak_etiketi,
     olay_guncelle,
 )
 from model.planning import PlanningSolution
@@ -108,7 +109,7 @@ def test_cozum_yoksa_turkce_uyari_ve_alt_sinir():
     assert "tam sayı" in ozet["mesaj"]
     assert "Traceback" not in ozet["mesaj"]
     assert ozet["alt_sinir"] == 1.5
-    assert ozet["durum"] == "Süre sınırı"
+    assert ozet["durum"] == "Süre doldu, çözüm yok"
     assert "Traceback" not in guvenli_hata(RuntimeError("Traceback (most recent call last):\nboom"))
 
 
@@ -197,6 +198,35 @@ def test_kucuk_plan_hedef_yazar_ve_operasyon_digere_dokunmaz():
     yeni_metin = " ".join(str(deger) for satir in guncel["program"] for deger in satir.values())
     assert "Doğu" in yeni_metin or guncel["acik"]
     assert olay_guncelle(MemorySupabase()) is None
+
+
+def test_etiketler_ve_aralik_yuzdesi():
+    assert kaynak_etiketi("U", "umke-1") == "UMKE 1"
+    assert kaynak_etiketi("W", "makine-1") == "İş makinesi 1"
+    assert app._plan_yuzde(0) == "0%"
+    assert app._plan_yuzde(0.974) == "97.4%"
+    db = _db()
+    instance, roster = build_planning_instance(*_enkaz_ekip(db), u_top=0, w_top=0)
+    bulunan = PlanningSolution(
+        status="Time limit",
+        objective=3.0,
+        z1_by_scenario={},
+        gap=0.0,
+        lower_bound=3.0,
+        seconds=2,
+        G={"J1": 1, "J2": 0},
+        V={},
+        VU={},
+        VW={},
+        periods=1,
+        horizon=2,
+        teams=[],
+        z1=3.0,
+    )
+    ozet = gorunum(instance, bulunan, roster, periyot=1, sure=2)
+    assert ozet["durum"] == "Süre doldu, çözüm bulundu"
+    assert all(satir["Ekip"].startswith("AK-") for satir in ozet["yerlesim"])
+    assert all(satir["Ekip"].startswith("AK-") for satir in ozet["program"])
 
 
 def test_girdi_yoksa_cozucu_calismaz():

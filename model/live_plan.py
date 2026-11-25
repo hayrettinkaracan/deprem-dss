@@ -92,6 +92,17 @@ def referans_senaryo(instance: Instance):
     return max(instance.scenarios, key=lambda scenario: scenario.P)
 
 
+def kaynak_etiketi(group: str, resource_id: str) -> str:
+    """UMKE 1, İş makinesi 1. Arama-kurtarma adı ekip kaydından gelir."""
+
+    sira = resource_id.rsplit("-", 1)[-1]
+    if group == "U":
+        return f"UMKE {sira}"
+    if group == "W":
+        return f"İş makinesi {sira}"
+    return resource_id
+
+
 def _kisa_merkez(ad: str) -> str:
     """Ziyaret hücresi dar ekranda da okunsun. Tam ad yerleştirme tablosunda durur."""
 
@@ -182,7 +193,7 @@ def olay_guncelle(
     )
     if not cozum_var(solution):
         eski = dict(kayit)
-        eski["durum"] = _durum_adi(solution.status)
+        eski["durum"] = _durum_adi(solution.status, False)
         eski["durum_kodu"] = solution.status
         eski["alt_sinir"] = solution.lower_bound
         eski["aralik"] = solution.gap
@@ -237,7 +248,7 @@ def gorunum(
     merkez_satirlari = _merkez_satirlari(instance, solution, yerlesim) if var else []
     program, sutunlar = _program(instance, solution, roster, senaryo.s) if var else ([], [])
     mesaj = (
-        f"{baslik} hazır. Çözücü durumu: {_durum_adi(solution.status)}. Z1 = {_sayi(z1)}."
+        f"{baslik} hazır. Çözücü durumu: {_durum_adi(solution.status, var)}. Z1 = {_sayi(z1)}."
         if var
         else COZUM_YOK
     )
@@ -246,7 +257,7 @@ def gorunum(
         "level": "success" if var else "warning",
         "mesaj": mesaj,
         "uyari": None if var else COZUM_YOK,
-        "durum": _durum_adi(solution.status),
+        "durum": _durum_adi(solution.status, var),
         "durum_kodu": solution.status,
         "z1": z1,
         "alt_sinir": solution.lower_bound,
@@ -503,7 +514,7 @@ def _yerlesim(instance, solution, roster, scenario_s: str, onceki: dict[int, str
         merkez = _merkez_from_chain(chain)
         satirlar.append(
             {
-                "Ekip": f"{_GRUP_AD.get(resource.group, resource.group)} {resource.r}",
+                "Ekip": kaynak_etiketi(resource.group, resource.r),
                 "Grup": _GRUP_AD.get(resource.group, resource.group),
                 "Merkez": ad.get(merkez, merkez or "—"),
             }
@@ -524,9 +535,7 @@ def _program(instance, solution, roster, scenario_s: str) -> tuple[list[dict], l
     }
     for resource in solution.teams:
         if resource.r in ekstra:
-            sira = resource.r.rsplit("-", 1)[-1]
-            ad = {"U": "UMKE", "W": "Makine"}.get(resource.group, resource.group)
-            kaynaklar.append((resource.r, f"{ad} {sira}"))
+            kaynaklar.append((resource.r, kaynak_etiketi(resource.group, resource.r)))
     for kaynak, etiket in kaynaklar:
         chain = solution.chains.get((kaynak, scenario_s), [])
         hucre = {t: [] for t in range(1, solution.periods + 1)}
@@ -585,10 +594,11 @@ def _yer_merkezi(yerlesim: list[dict], ekip_id: int) -> str | None:
     return None
 
 
-def _durum_adi(status: str) -> str:
+def _durum_adi(status: str, cozum: bool = False) -> str:
+    if status == "Time limit":
+        return "Süre doldu, çözüm bulundu" if cozum else "Süre doldu, çözüm yok"
     return {
         "Optimal": "Optimal",
-        "Time limit": "Süre sınırı",
         "Infeasible": "Uygun çözüm yok",
         "Not Solved": "Çözülmedi",
         "Undefined": "Tanımsız",

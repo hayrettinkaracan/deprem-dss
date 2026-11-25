@@ -340,7 +340,8 @@ def talep_metni(value):
         return "—"
     if not math.isfinite(sayi):
         return "—"
-    return f"{sayi:.1f} kişi"
+    # Kayıt kişi talebidir. Kesirli kişi okunmaz; en yakın tam sayı gösterilir.
+    return f"{round(sayi):.0f} kişi"
 
 
 def gecen_sure(baslangic, simdi=None):
@@ -919,6 +920,34 @@ def _plan_sayi(value):
     return f"{number:.4g}"
 
 
+def _olcu(kolon, etiket, deger):
+    """Metrik. Değer satır kırar; dar ekranda kesilmez."""
+
+    kolon.html(
+        "<div style='margin:0 0 0.75rem 0'>"
+        "<div style='font-size:0.85rem;line-height:1.2'>"
+        + html.escape(str(etiket))
+        + "</div>"
+        "<div style='font-size:1.15rem;font-weight:600;line-height:1.3;overflow-wrap:anywhere'>"
+        + html.escape(str(deger))
+        + "</div></div>"
+    )
+
+
+def _plan_yuzde(value):
+    """Aralık oranıdır: (üst − alt) / |alt|. Ekranda yüzde."""
+
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not math.isfinite(number):
+        return "—"
+    return f"{number * 100:.4g}%"
+
+
 def _metin_tablosu(rows):
     frame = pd.DataFrame(rows)
     config = {column: st.column_config.TextColumn(column) for column in frame.columns}
@@ -931,11 +960,19 @@ def render_plan():
         return
     st.subheader("Plan sonucu")
     st.caption(ozet.get("caption") or "")
-    col_durum, col_z1, col_alt, col_aralik = st.columns(4)
-    col_durum.metric("Durum", ozet.get("durum") or "—")
-    col_z1.metric("Z1", _plan_sayi(ozet.get("z1")))
-    col_alt.metric("Alt sınır", _plan_sayi(ozet.get("alt_sinir")))
-    col_aralik.metric("MIP aralığı", _plan_sayi(ozet.get("aralik")))
+    st.html(
+        "<style>"
+        ".st-key-plan_olculer [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;}"
+        ".st-key-plan_olculer [data-testid='stColumn']{min-width:0 !important;}"
+        "</style>"
+    )
+    with st.container(key="plan_olculer"):
+        sol, sag = st.columns(2)
+        _olcu(sol, "Durum", ozet.get("durum") or "—")
+        _olcu(sag, "Z1", _plan_sayi(ozet.get("z1")))
+        sol, sag = st.columns(2)
+        _olcu(sol, "Alt sınır", _plan_sayi(ozet.get("alt_sinir")))
+        _olcu(sag, "MIP aralığı", _plan_yuzde(ozet.get("aralik")))
     if ozet.get("uyari"):
         st.warning(ozet["uyari"])
     if ozet.get("kayit_uyari"):
@@ -972,6 +1009,20 @@ def render_plan():
                 "Yer": st.column_config.TextColumn("Yer", width=150),
             },
         )
+
+
+def render_plan_ozeti():
+    """Durum sekmesi: tabloların kısa hali."""
+
+    ozet = st.session_state.get("plan_ozet")
+    if not isinstance(ozet, dict):
+        return
+    st.subheader("Son plan")
+    acik = ", ".join(ozet.get("acik_adlar") or []) or "—"
+    st.caption(
+        f"{ozet.get('durum') or '—'}. Z1 {_plan_sayi(ozet.get('z1'))}. "
+        f"MIP aralığı {_plan_yuzde(ozet.get('aralik'))}. Açık merkezler: {acik}."
+    )
 
 
 def _plan_oturuma(ozet):
@@ -1258,8 +1309,6 @@ def main():
             _ekip_giris(ekipler, getattr(db, "is_memory", False))
     elif rol == "Admin":
         st.header("Admin Paneli")
-        render_son_atama()
-        render_plan()
         tab_enkaz, tab_ekip, tab_atama, tab_durum = st.tabs(
             ["Enkazlar", "Ekipler", "Atama Çalıştır", "Durum"]
         )
@@ -1522,8 +1571,11 @@ def main():
                 "Yeni enkaz eklenince veya bir ekip görevini bitirince operasyonel çözüm kendiliğinden çalışır. "
                 "Tamamlanmış atamalar korunur."
             )
+            render_son_atama()
+            render_plan()
 
         with tab_durum:
+            render_plan_ozeti()
             st.subheader("Aktif Atamalar (Devam Eden)")
             show_atama_tablosu(
                 fetch("atamalar", ATAMA_SELECT, (("eq", "durum", "devam"),)),
