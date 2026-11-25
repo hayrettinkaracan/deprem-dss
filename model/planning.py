@@ -56,6 +56,8 @@ class PlanningSolution:
     q: dict[tuple[str, str, int, str], float] = field(default_factory=dict)
     R: dict[tuple[str, str, int, str], float] = field(default_factory=dict)
     log_excerpt: str = ""
+    z1: float | None = None
+    z2: float | None = None
 
 
 def solve_planning(
@@ -66,13 +68,31 @@ def solve_planning(
     eta: float = ETA,
     threads: int | None = None,
     solver: pulp.LpSolver | None = None,
+    mode: str = "z1",
+    delta: float = 0.0,
+    z1_cap: float | None = None,
+    z2_cap: float | None = None,
+    min_centers: int = 0,
+    fix_centers: dict[str, int] | None = None,
 ) -> PlanningSolution:
-    """Üç senaryolu planlama. time_limit saniye; boşluk gizlenmez."""
+    """Planlama. mode: z1, z2 veya weighted (Z1 + δ Z2). Boşluk gizlenmez."""
 
     validate(instance)
     staff = planning_staff(instance)
     network = build_planning_network(instance, periods, staff)
-    problem = _build(instance, network, staff, vartheta, eta)
+    problem = _build(
+        instance,
+        network,
+        staff,
+        vartheta,
+        eta,
+        mode=mode,
+        delta=delta,
+        z1_cap=z1_cap,
+        z2_cap=z2_cap,
+        min_centers=min_centers,
+        fix_centers=fix_centers,
+    )
     own_solver = solver is None
     if solver is None:
         log_path = tempfile.NamedTemporaryFile(prefix="cbc-z1-", suffix=".log", delete=False).name
@@ -117,6 +137,12 @@ def _build(
     staff: Staff,
     vartheta: float,
     eta: float,
+    mode: str = "z1",
+    delta: float = 0.0,
+    z1_cap: float | None = None,
+    z2_cap: float | None = None,
+    min_centers: int = 0,
+    fix_centers: dict[str, int] | None = None,
 ) -> pulp.LpProblem:
     problem = pulp.LpProblem("Deprem_Z1", pulp.LpMinimize)
     length = instance.L
@@ -409,19 +435,50 @@ def _build(
                     f"eq_4_31_bit_{resource.r}_{origin}_{scenario.s}",
                 )
 
-    objective = []
+    from model.opening_cost import calibrate_opening_cost
+
+    z1_terms = []
     for scenario in instance.scenarios:
         for site in instance.sites:
             if site.gamma is None:
                 raise ValueError(f"γ_{site.i} yok")
             for t in range(1, periods + 1):
                 for group in GROUPS:
-                    objective.append(
+                    z1_terms.append(
                         scenario.P
                         * site.gamma
                         * (R[(group, site.i, t, scenario.s)] - q[(group, site.i, t, scenario.s)])
                     )
-    problem += pulp.lpSum(objective)
+    z1_expr = pulp.lpSum(z1_terms) if z1_terms else 0
+    opening = calibrate_opening_cost(instance)
+    z2_terms = [opening.f_j[center.j] * G[center.j] for center in instance.centers]
+    for scenario in instance.scenarios:
+        for resource in staff.resources:
+            for arc in network.team_arcs[scenario.s][resource.r]:
+                if not _is_har(arc):
+                    continue
+                y = Y[(resource.r, arc.u.key, arc.v.key, scenario.s)]
+                z2_terms.append(scenario.P * arc.sey * y)
+    z2_expr = pulp.lpSum(z2_terms) if z2_terms else 0
+    if z1_cap is not None:
+        problem += z1_expr <= z1_cap + 1e-4, "z1_cap"
+    if z2_cap is not None:
+        problem += z2_expr <= z2_cap + 1e-4, "eq_4_4_eps"
+    if min_centers:
+        problem += pulp.lpSum(G[center.j] for center in instance.centers) >= min_centers, "min_centers"
+    if fix_centers:
+        for center_j, value in fix_centers.items():
+            problem += G[center_j] == value, f"fix_G_{center_j}"
+    if mode == "z1":
+        problem += z1_expr
+    elif mode == "z2":
+        problem += z2_expr
+    elif mode == "weighted":
+        problem += z1_expr + delta * z2_expr
+    else:
+        raise ValueError(f"bilinmeyen amaç {mode}")
+    problem._z1_expr = z1_expr
+    problem._z2_expr = z2_expr
     bundle = {
         "G": G,
         "V": V,
@@ -769,6 +826,8 @@ def _extract(
                         R[(group, site.i, t, scenario.s)] - q[(group, site.i, t, scenario.s)]
                     )
         z1_by_scenario[scenario.s] = total
+    z1_value = pulp.value(problem._z1_expr)
+    z2_value = pulp.value(problem._z2_expr)
 
     chosen: dict[tuple[str, str], list[tuple[str, str]]] = {}
     chains: dict[tuple[str, str], list[str]] = {}
@@ -806,6 +865,8 @@ def _extract(
         q=q,
         R=R,
         log_excerpt=_excerpt(log_text),
+        z1=None if z1_value is None else float(z1_value),
+        z2=None if z2_value is None else float(z2_value),
     )
 
 

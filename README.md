@@ -55,9 +55,24 @@ PuLP 2.9 kullanılır. PuLP 3+ `PULP_CBC_CMD` ve `LpVariable.dicts` adlarını k
 ## Kontroller
 
 ```bash
+pip install -r requirements.txt
 python3 -m unittest discover -s tests -v
 python3 -m pytest -q
 ```
+
+PuLP **2.9.0** sabittir (`requirements.txt`). CBC, PuLP 2.9 paketinin içinden gelir. PuLP 3 bu çözücü adını kaldırdığı için kurulmaz.
+
+## 5.3 sayısal koşu
+
+Uzun CBC koşusu depoya gömülü değildir. Çizelge 5.1 planı yerelde üretilir ve `docs/sonuclar_5_3.md` dosyasının üzerine yazılır.
+
+```bash
+pip install -r requirements.txt
+python -m scripts.run_5_3 --mode z1 --time-limit 900 --threads 4 --out docs/sonuclar_5_3.md
+python -m scripts.run_5_3 --mode pareto --time-limit 120 --threads 4 --points 5 --out docs/sonuclar_5_3.md
+```
+
+`--threads 0` bütün çekirdekleri kullanır. `--mode z1` yalnız (4.2). `--mode pareto` Z1’den sonra Z̄_2 ve Z_2 uçlarını, ardından beş ε noktasında Z1 + δ Z2 amaçlı (4.4) taramasını çalıştırır. Süre sınırında kalan noktanın durumu ve aralığı dosyada olduğu gibi durur.
 
 ## Özellikler
 

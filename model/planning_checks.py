@@ -34,8 +34,9 @@ def planning_violations(
     _durations(instance, solution, staff, network, problems)
     _chains(instance, solution, staff, network, by_id, eta, vartheta, problems)
     expected = sum(scenario.P * solution.z1_by_scenario[scenario.s] for scenario in instance.scenarios)
-    if abs(expected - solution.objective) > 1e-2:
-        problems.append(f"Z1 {solution.objective} formül {expected}")
+    z1_value = solution.z1 if solution.z1 is not None else solution.objective
+    if z1_value is not None and abs(expected - z1_value) > 1e-2:
+        problems.append(f"Z1 {z1_value} formül {expected}")
     return problems
 
 
