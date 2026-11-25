@@ -215,10 +215,13 @@ class GirisTests(unittest.TestCase):
         self.assertNotIn("auth", at.session_state)
         at = ekip_giris(self.app(), 2, "ekip-2")
         assert_clean(self, at)
-        metin = "\n".join([*alerts(at), *(el.value for el in at.caption)])
-        self.assertIn("aktif görevin yok", metin)
+        metin = "\n".join(
+            [*alerts(at), *(el.value for el in at.caption), *(el.value for el in at.html)]
+        )
+        self.assertIn("Henüz görev yok, müsaitsiniz", metin)
         self.assertNotIn("Aktif görev", metin)
         self.assertNotIn("Avcılar-Merkez", metin)
+        self.assertNotIn("Devam ediyor", metin)
         self.assertFalse(any(w.key == "gorev_bitti" for w in at.button))
         db = at.session_state["memory_db"]
         self.assertIsNone(app.gorevi_bitir(db, at.session_state["auth"]["ekip_id"], 1))
@@ -238,7 +241,7 @@ class GirisTests(unittest.TestCase):
         at = ekip_giris(at, yeni_id, "yeni-kod")
         assert_clean(self, at)
         self.assertEqual(int(at.session_state["auth"]["ekip_id"]), yeni_id)
-        self.assertTrue(any("aktif görevin yok" in m for m in alerts(at)))
+        self.assertTrue(any("Henüz görev yok, müsaitsiniz" in m for m in alerts(at)))
         self.assertFalse(any("Aktif görev" in m for m in alerts(at)))
 
 

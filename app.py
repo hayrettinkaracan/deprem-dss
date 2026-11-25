@@ -7,6 +7,7 @@ kendi erişim koduyla girer.
 
 import copy
 import hashlib
+import html
 import hmac
 import math
 import os
@@ -75,7 +76,106 @@ DURUM_ETIKET = {
     "bitti": "Bitti",
 }
 ATAMA_SELECT = "*, ekipler(isim), enkazlar(isim)"
-GOREV_SELECT = "*, enkazlar(isim, talep)"
+GOREV_SELECT = (
+    "id, ekip_id, enkaz_id, baslangic, durum, "
+    "enkazlar(isim, talep, enlem, boylam, makine_gerekli)"
+)
+EKIP_GOREV_YOK = "Henüz görev yok, müsaitsiniz"
+EKIP_BAGLANTI = "Bağlantı kurulamadı. Görev bilgisi alınamadı."
+EKIP_TELEFON_CSS = """
+<style>
+/* Streamlit düğmesi ~38px. Eldiven için en az 44px; burada 48px.
+   Yalnızca ekip akışı. Kenar çubuğu kullanılmaz.
+   Varsayılan birincil kırmızı, beyaz yazı açık havada zayıf: zemin #111.
+   stMain: section.main bu sürümde yok. */
+[data-testid="stSidebar"],
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"],
+[data-testid="stExpandSidebarButton"],
+[data-testid="stHeader"],
+[data-testid="stHeaderActionElements"] {
+  display: none !important;
+}
+[data-testid="stMain"] [data-testid="stBaseButton-primary"],
+[data-testid="stMain"] [data-testid="stBaseButton-secondary"],
+[data-testid="stMain"] [data-testid="stBaseLinkButton-secondary"],
+[data-testid="stMain"] [data-testid="stFormSubmitButton"] button,
+[data-testid="stMain"] button[aria-label^="Help for"] {
+  min-height: 48px !important;
+  min-width: 48px !important;
+  font-size: 1.0625rem;
+}
+[data-testid="stMain"] [data-testid="stBaseButton-primary"] {
+  background-color: #111111 !important;
+  color: #ffffff !important;
+  border: 2px solid #111111 !important;
+}
+[data-testid="stMain"] [data-testid="stBaseButton-secondary"],
+[data-testid="stMain"] [data-testid="stBaseLinkButton-secondary"] {
+  background-color: #ffffff !important;
+  color: #111111 !important;
+  border: 2px solid #111111 !important;
+}
+[data-testid="stMain"] input[role="combobox"],
+[data-testid="stMain"] [data-testid="stTextInput"] input,
+[data-testid="stMain"] button[aria-label="Open"],
+[data-testid="stMain"] button[aria-label="Show password"],
+[data-testid="stMain"] button[aria-label="Hide password"] {
+  min-height: 48px !important;
+  min-width: 48px !important;
+  font-size: 1.0625rem;
+}
+[data-testid="stMain"] [data-testid="stAlert"] {
+  font-size: 1.125rem;
+  overflow-wrap: anywhere;
+}
+.ekip-gorev {
+  font-size: 1.25rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.ekip-gorev p {
+  margin: 0 0 0.65rem 0;
+}
+.ekip-kimlik {
+  font-size: 1rem;
+  line-height: 1.3;
+  margin: 0 0 0.15rem 0;
+}
+/* Streamlit sütunu dar ekranda min-width:%100 ile alta kayıyor.
+   Çıkış ve Rol aynı satırda kalsın. */
+[data-testid="stMain"] [data-testid="stHorizontalBlock"] {
+  flex-wrap: nowrap !important;
+}
+[data-testid="stMain"] [data-testid="stColumn"] {
+  min-width: 0 !important;
+}
+/* İki harita bağlantısı aynı kural: yükseklik ve kalınlık eşit, 390px'te yan yana. */
+.ekip-harita {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.75rem 0;
+}
+.ekip-harita a {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 48px;
+  min-width: 0;
+  padding: 0.45rem 0.4rem;
+  border: 2px solid #111111;
+  background: #ffffff;
+  color: #111111;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+}
+</style>
+"""
 _DBS = {}
 _CONFIRM_AVCILAR = "confirm_avcilar_sil"
 
@@ -228,6 +328,197 @@ def gorevi_bitir(db, oturum_ekip_id, atama_id, simdi=None):
     return bit
 
 
+def talep_metni(value):
+    if value is None or value == "":
+        return "—"
+    try:
+        sayi = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not math.isfinite(sayi):
+        return "—"
+    return f"{sayi:.1f} kişi"
+
+
+def gecen_sure(baslangic, simdi=None):
+    """Başlangıçtan beri geçen süre. Okunamıyorsa veya gelecekteyse —."""
+    if baslangic is None:
+        return "—"
+    text = str(baslangic).strip()
+    if not text or text.lower() == "none":
+        return "—"
+    try:
+        start = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return "—"
+    now = simdi or datetime.now(start.tzinfo)
+    if start.tzinfo is not None and now.tzinfo is None:
+        now = now.replace(tzinfo=start.tzinfo)
+    elif start.tzinfo is None and now.tzinfo is not None:
+        start = start.replace(tzinfo=now.tzinfo)
+    saniye = (now - start).total_seconds()
+    if saniye < 0:
+        return "—"
+    dakika = int(saniye // 60)
+    gun, dakika = divmod(dakika, 24 * 60)
+    saat, dakika = divmod(dakika, 60)
+    parcalar = []
+    if gun:
+        parcalar.append(f"{gun} gün")
+    if saat:
+        parcalar.append(f"{saat} saat")
+    if dakika or not parcalar:
+        parcalar.append(f"{dakika} dakika")
+    return " ".join(parcalar)
+
+
+def harita_baglari(enlem, boylam):
+    """(Google Maps https, geo URI). Koordinat yoksa (None, None)."""
+    try:
+        lat = float(enlem)
+        lon = float(boylam)
+    except (TypeError, ValueError):
+        return None, None
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+        return None, None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None, None
+    return (
+        f"https://www.google.com/maps/search/?api=1&query={lat:.6f},{lon:.6f}",
+        f"geo:{lat:.6f},{lon:.6f}",
+    )
+
+
+def konum_metni(enlem, boylam):
+    google, _geo = harita_baglari(enlem, boylam)
+    if google is None:
+        return "Konum yok"
+    lat = float(enlem)
+    lon = float(boylam)
+    ns = "K" if lat >= 0 else "G"
+    ew = "D" if lon >= 0 else "B"
+    return f"{abs(lat):.5f}° {ns}, {abs(lon):.5f}° {ew}"
+
+
+def _adet(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def son_yardimci(rows):
+    """Aynı enkaz için birden fazla satır varsa en son id."""
+    if not rows:
+        return None
+
+    def _sira(row):
+        try:
+            return int(row.get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return max(rows, key=_sira)
+
+
+def yardimci_metni(rows):
+    yardim = son_yardimci(rows)
+    if yardim is None:
+        return "Atanmadı"
+    return f"UMKE {_adet(yardim.get('umke_sayisi'))}, iş makinesi {_adet(yardim.get('makine_sayisi'))}"
+
+
+def gorev_basligi(atama):
+    """Enkaz adı başlıktır. Kayıt numarası aynı isimli sahaları ayırır."""
+    enkaz = atama.get("enkazlar") if isinstance(atama.get("enkazlar"), dict) else {}
+    ad = enkaz.get("isim") or "—"
+    try:
+        return f"Görev: {ad} (#{int(atama.get('enkaz_id'))})"
+    except (TypeError, ValueError):
+        return f"Görev: {ad}"
+
+
+def gorev_satirlari(_ekip, atama, yardimci_rows, simdi=None):
+    """Görev kartının ayrıntı satırları ve harita adresleri. Ekip kimliği ayrı satırdadır."""
+    enkaz = atama.get("enkazlar") if isinstance(atama.get("enkazlar"), dict) else {}
+    google, geo = harita_baglari(enkaz.get("enlem"), enkaz.get("boylam"))
+    satirlar = [
+        ("Talep", talep_metni(enkaz.get("talep"))),
+        ("İş makinesi gerekli", evet_hayir(enkaz.get("makine_gerekli"))),
+        ("Yardımcı kaynak", yardimci_metni(yardimci_rows)),
+        ("Başlangıç", format_dt(atama.get("baslangic"))),
+        ("Geçen süre", gecen_sure(atama.get("baslangic"), simdi)),
+        ("Konum", konum_metni(enkaz.get("enlem"), enkaz.get("boylam"))),
+    ]
+    return satirlar, google, geo
+
+
+def gorev_html(satirlar):
+    parcalar = [
+        '<div class="ekip-gorev" role="status" '
+        'style="font-size:1.25rem;line-height:1.45;overflow-wrap:anywhere">'
+    ]
+    for etiket, deger in satirlar:
+        parcalar.append(
+            '<p style="margin:0 0 0.65rem 0"><strong>'
+            + html.escape(str(etiket))
+            + ":</strong> "
+            + html.escape(str(deger))
+            + "</p>"
+        )
+    parcalar.append("</div>")
+    return "".join(parcalar)
+
+
+def ekip_onay_metni(enkaz_adi):
+    """Yalnızca bu ekibin ataması kapanır. Enkaz ve diğer ekipler durmaz."""
+    ad = enkaz_adi or "—"
+    return (
+        f"Bu ekibin {ad} görevi biter ve ekip müsait olur. "
+        "Aynı enkazdaki diğer ekipler çalışmaya devam eder."
+    )
+
+
+def ekip_bitti_metni(ekip_adi, ekip_id, enkaz_adi, bas_txt, bit_txt):
+    return (
+        f"Görev bitti. Görev tamamlandı: {ekip_adi} (#{ekip_id}) → {enkaz_adi}. "
+        f"Başlangıç {bas_txt}, bitiş {bit_txt}. "
+        "Diğer ekipler aynı enkazda devam edebilir."
+    )
+
+
+def ekip_gorev_kaydi(fetch, ekip_id):
+    """Ekip satırı, devam eden görev, varsa o enkazın yardımcı kaynağı.
+
+    Görev yoksa yardımcı kaynak okunmaz.
+    """
+    ekip_no = int(ekip_id)
+    bulunan = fetch("ekipler", "id, isim, durum", (("eq", "id", ekip_no),))
+    atamalar = [
+        row
+        for row in fetch(
+            "atamalar",
+            GOREV_SELECT,
+            (("eq", "ekip_id", ekip_no), ("eq", "durum", "devam")),
+        )
+        if atama_ekibe_ait(row, ekip_no)
+    ]
+    gorev = atamalar[0] if atamalar else None
+    yardimci = []
+    if gorev is not None:
+        try:
+            enkaz_no = int(gorev.get("enkaz_id"))
+        except (TypeError, ValueError):
+            enkaz_no = None
+        if enkaz_no is not None:
+            yardimci = fetch(
+                "yardimci_kaynaklar",
+                "id, umke_sayisi, makine_sayisi",
+                (("eq", "enkaz_id", enkaz_no),),
+            )
+    return bulunan, gorev, yardimci
+
+
 def modelsiz_ekip(rows):
     """Erişim kodunu optimizasyon girdisine koyma."""
     temiz = []
@@ -318,7 +609,12 @@ def _ekip_giris(ekipler, demo):
             autocomplete="off",
             help="Yöneticinin bu ekibe verdiği kod. Başka ekibin kodu bu kaydı açmaz.",
         )
-        if st.form_submit_button("Giriş", key="ekip_giris"):
+        if st.form_submit_button(
+            "Giriş",
+            key="ekip_giris",
+            type="primary",
+            width="stretch",
+        ):
             sonuc = ekip_kodu_sonucu(by_id.get(int(ekip_id)), kod)
             if sonuc == "tamam":
                 st.session_state["auth"] = {"rol": "Ekip", "ekip_id": int(ekip_id)}
@@ -682,9 +978,183 @@ def render_birinci_asama():
         st.dataframe(pd.DataFrame(chain_view["rows"]), hide_index=True)
 
 
+def _rol_secimi():
+    return st.selectbox(
+        "Rol",
+        ["Admin", "Ekip"],
+        key="rol",
+        help="Admin parola ister. Ekip, kendi kaydını ve erişim kodunu girer; yalnızca kendi görevini görür.",
+    )
+
+
+def _cikis_dugmesi(genis=False):
+    auth = st.session_state.get("auth")
+    if isinstance(auth, dict) and st.button(
+        "Çıkış",
+        key="cikis",
+        width="stretch" if genis else "content",
+        help="Oturumu kapatır. Panele dönmek için parola veya ekip kodu gerekir.",
+    ):
+        st.session_state.pop("auth", None)
+        st.session_state.pop("ekip_onay_id", None)
+        st.session_state.pop("gorev_sonuc", None)
+        st.rerun()
+
+
+def _ekip_ust_satir():
+    """Rol ve çıkış üstte. Asıl eylem ekranın sonunda kalır."""
+    if isinstance(st.session_state.get("auth"), dict):
+        sol, sag = st.columns([1, 2], vertical_alignment="bottom")
+        with sol:
+            _cikis_dugmesi(genis=True)
+        with sag:
+            _rol_secimi()
+    else:
+        _rol_secimi()
+
+
+def _ekip_telefon_css():
+    st.html(EKIP_TELEFON_CSS)
+
+
+def _ekip_baglanti_goster(refresh):
+    st.error(EKIP_BAGLANTI)
+    if st.button("Yeniden dene", key="ekip_yeniden", width="stretch", wrap=True):
+        refresh()
+        st.rerun()
+
+
+def _ekip_harita(google, geo):
+    if not google:
+        return
+    # İkisi de düz bağlantı ve aynı sınıf. https yeni sekmede açılır;
+    # geo: harita uygulamasına gider, target kullanmaz.
+    st.html(
+        '<div class="ekip-harita">'
+        '<a href="'
+        + html.escape(google, quote=True)
+        + '" target="_blank" rel="noopener noreferrer">Google Haritalar</a>'
+        '<a href="'
+        + html.escape(geo, quote=True)
+        + '">Harita uygulaması</a>'
+        "</div>"
+    )
+
+
+def _kimlik_satiri(ekip):
+    st.html('<p class="ekip-kimlik">' + html.escape(kayit_etiketi(ekip)) + "</p>")
+
+
+def _ekip_aktif(db, refresh, ekip_id, secilen, gorev, yardimci):
+    satirlar, google, geo = gorev_satirlari(secilen, gorev, yardimci)
+    st.subheader(gorev_basligi(gorev))
+    st.html(gorev_html(satirlar))
+    _ekip_harita(google, geo)
+    onay = st.session_state.get("ekip_onay_id")
+    try:
+        onayda = int(onay) == int(gorev["id"])
+    except (TypeError, ValueError):
+        onayda = False
+    if onay is not None and not onayda:
+        st.session_state.pop("ekip_onay_id", None)
+    if not onayda and st.button("Yenile", key="ekip_yenile", width="stretch", wrap=True):
+        refresh()
+        st.rerun()
+    if not onayda:
+        if st.button(
+            "Görevim Bitti",
+            key="gorev_bitti",
+            type="primary",
+            width="stretch",
+            wrap=True,
+        ):
+            st.session_state["ekip_onay_id"] = int(gorev["id"])
+            st.rerun()
+        return
+    enkaz = gorev.get("enkazlar") if isinstance(gorev.get("enkazlar"), dict) else {}
+    enkaz_adi = enkaz.get("isim") or "—"
+    st.warning(ekip_onay_metni(enkaz_adi))
+    if st.button("Vazgeç", key="gorev_bitti_vazgec", width="stretch", wrap=True):
+        st.session_state.pop("ekip_onay_id", None)
+        st.rerun()
+    if st.button(
+        "Evet, görevi bitir",
+        key="gorev_bitti_onay",
+        type="primary",
+        width="stretch",
+        wrap=True,
+    ):
+        try:
+            bit = gorevi_bitir(db, ekip_id, gorev["id"])
+        except Exception:
+            _ekip_baglanti_goster(refresh)
+            return
+        if bit is None:
+            st.session_state.pop("ekip_onay_id", None)
+            st.error("Bu görev size ait değil veya zaten kapanmış.")
+            return
+        refresh()
+        st.session_state.pop("ekip_onay_id", None)
+        st.session_state["gorev_sonuc"] = {
+            "ekip_id": ekip_id,
+            "metin": ekip_bitti_metni(
+                secilen.get("isim") or "—",
+                ekip_id,
+                enkaz_adi,
+                format_dt(gorev.get("baslangic")),
+                format_dt(bit),
+            ),
+        }
+        st.rerun()
+
+
+def _ekip_paneli(db, fetch, refresh, auth):
+    try:
+        ekip_id = int(auth["ekip_id"])
+    except (KeyError, TypeError, ValueError):
+        st.error("Oturum geçersiz. Çıkış yapıp yeniden girin.")
+        return
+    try:
+        bulunan, gorev, yardimci = ekip_gorev_kaydi(fetch, ekip_id)
+    except Exception:
+        _ekip_baglanti_goster(refresh)
+        return
+    if not bulunan:
+        st.warning("Ekip kaydı bulunamadı. Çıkış yapıp yeniden girin.")
+        return
+    secilen = bulunan[0]
+    _kimlik_satiri(secilen)
+    if gorev is not None:
+        eski = st.session_state.get("gorev_sonuc")
+        if isinstance(eski, dict) and eski.get("ekip_id") == ekip_id:
+            st.session_state.pop("gorev_sonuc", None)
+        _ekip_aktif(db, refresh, ekip_id, secilen, gorev, yardimci)
+        return
+    sonuc = st.session_state.get("gorev_sonuc")
+    if isinstance(sonuc, dict) and sonuc.get("ekip_id") == ekip_id and sonuc.get("metin"):
+        st.success(sonuc["metin"])
+    else:
+        st.info(EKIP_GOREV_YOK)
+    if st.button("Yenile", key="ekip_yenile", width="stretch", wrap=True):
+        refresh()
+        st.rerun()
+
+
 def main():
-    # İlk Streamlit çağrısı bu olmalı.
-    st.set_page_config(page_title="Deprem Kaynak Atama DSS", layout="wide")
+    # Rol yerleşimden önce okunur: ekip ekranı centered, yönetim wide kalır.
+    rol = st.session_state.get("rol", "Admin")
+    if rol == "Ekip":
+        st.set_page_config(
+            page_title="Deprem Kaynak Atama DSS",
+            layout="centered",
+            initial_sidebar_state="collapsed",
+        )
+    else:
+        st.set_page_config(
+            page_title="Deprem Kaynak Atama DSS",
+            layout="wide",
+            initial_sidebar_state="auto",
+        )
 
     @st.cache_resource
     def connect_supabase(url, key):
@@ -725,32 +1195,26 @@ def main():
     def fetch_now(table, columns="*", filters=()):
         return run_select(db, table, columns, tuple(filters))
 
-    st.title("Marmara Depremi Kaynak Atama Karar Destek Sistemi")
+    if rol != "Ekip":
+        st.title("Marmara Depremi Kaynak Atama Karar Destek Sistemi")
     if getattr(db, "is_memory", False):
-        st.warning(
-            "Deneme modu. Veriler kaydedilmez; kayıtlar yalnızca bu oturumda bellekte tutulur."
-        )
+        if rol == "Ekip":
+            st.warning("Deneme modu. Kayıtlar kaydedilmez.")
+        else:
+            st.warning(
+                "Deneme modu. Veriler kaydedilmez; kayıtlar yalnızca bu oturumda bellekte tutulur."
+            )
     render_flashes()
-    if not getattr(db, "is_memory", False):
+    if rol == "Admin" and not getattr(db, "is_memory", False):
         st.sidebar.info("Veriler Supabase'te kalır. Tamamlanan atamalar yeniden planlamada silinmez.")
-    rol = st.sidebar.selectbox(
-        "Rol",
-        ["Admin", "Ekip"],
-        key="rol",
-        help="Admin parola ister. Ekip, kendi kaydını ve erişim kodunu girer; yalnızca kendi görevini görür.",
-    )
     auth = st.session_state.get("auth")
     if auth is not None and not isinstance(auth, dict):
         st.session_state.pop("auth", None)
         auth = None
     giris_tamam = isinstance(auth, dict) and auth.get("rol") == rol
-    if isinstance(auth, dict) and st.sidebar.button(
-        "Çıkış",
-        key="cikis",
-        help="Oturumu kapatır. Panele dönmek için parola veya ekip kodu gerekir.",
-    ):
-        st.session_state.pop("auth", None)
-        st.rerun()
+    if rol != "Ekip":
+        _rol_secimi()
+        _cikis_dugmesi()
     parola, deneme_varsayilani = yonetici_parolasi(
         secret_degeri("ADMIN_PASSWORD"),
         os.environ.get("ADMIN_PASSWORD"),
@@ -760,7 +1224,14 @@ def main():
     if rol == "Admin" and not giris_tamam:
         _admin_giris(parola, deneme_varsayilani)
     elif rol == "Ekip" and not giris_tamam:
-        _ekip_giris(fetch("ekipler", "*"), getattr(db, "is_memory", False))
+        _ekip_telefon_css()
+        _ekip_ust_satir()
+        try:
+            ekipler = fetch("ekipler", "*")
+        except Exception:
+            _ekip_baglanti_goster(refresh)
+        else:
+            _ekip_giris(ekipler, getattr(db, "is_memory", False))
     elif rol == "Admin":
         st.header("Admin Paneli")
         render_son_atama()
@@ -1126,59 +1597,9 @@ def main():
             else:
                 st.info("Aktif enkaz yok.")
     else:
-        st.header("Ekip Paneli")
-        try:
-            ekip_id = int(auth["ekip_id"])
-        except (KeyError, TypeError, ValueError):
-            st.error("Oturum geçersiz. Çıkış yapıp yeniden girin.")
-        else:
-            bulunan = fetch("ekipler", "id, isim, durum", (("eq", "id", ekip_id),))
-            if not bulunan:
-                st.warning("Ekip kaydı bulunamadı. Çıkış yapıp yeniden girin.")
-            else:
-                secilen = bulunan[0]
-                st.caption(f"Oturum: {kayit_etiketi(secilen)}")
-                atama = [
-                    row
-                    for row in fetch(
-                        "atamalar",
-                        GOREV_SELECT,
-                        (("eq", "ekip_id", ekip_id), ("eq", "durum", "devam")),
-                    )
-                    if atama_ekibe_ait(row, ekip_id)
-                ]
-                if atama:
-                    gorev = atama[0]
-                    enkaz = gorev.get("enkazlar") or {}
-                    talep = enkaz.get("talep")
-                    talep_txt = "—" if talep is None else f"{float(talep):.1f}"
-                    enkaz_adi = enkaz.get("isim") or "—"
-                    bas_txt = format_dt(gorev.get("baslangic"))
-                    st.success(
-                        f"Aktif görev: {enkaz_adi} (#{gorev.get('enkaz_id')}). "
-                        f"Kalan talep {talep_txt} kişi. Başlangıç {bas_txt}."
-                    )
-                    if st.button(
-                        "Görevim Bitti",
-                        key="gorev_bitti",
-                        help="Yalnızca bu ekibin devam eden görevini bitirir ve ekibi müsait yapar. Aynı enkazdaki diğer ekipler durur.",
-                    ):
-                        bit = gorevi_bitir(db, ekip_id, gorev["id"])
-                        if bit is None:
-                            st.error("Bu görev size ait değil veya zaten kapanmış.")
-                        else:
-                            refresh()
-                            flash(
-                                "success",
-                                (
-                                    f"Görev tamamlandı: {secilen['isim']} (#{ekip_id}) → {enkaz_adi}. "
-                                    f"Başlangıç {bas_txt}, bitiş {format_dt(bit)}."
-                                ),
-                            )
-                            flash("info", "Diğer ekipler aynı enkazda devam edebilir.")
-                            st.rerun()
-                else:
-                    st.info("Şu an aktif görevin yok. Müsait durumdasın.")
+        _ekip_telefon_css()
+        _ekip_ust_satir()
+        _ekip_paneli(db, fetch, refresh, auth)
 
 
 if __name__ == "__main__":
