@@ -98,6 +98,8 @@ class Arc:
     kind: str
     sey: float = 0.0
     departure_t: int | None = None
+    # (4.33). Aynı yerde 0. ω^yol ve σ/ω uçlarında zaman yoktur.
+    m_uv: float | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -160,7 +162,7 @@ def travel_sey(
 ) -> float | None:
     """(4.1)'in farklı noktalar kolu. τ yoksa veya iki merkezse None.
 
-    Dönüşte τ_{i,j} = τ_{j,i}. Enkaz–enkaz süresi tabloda yoktur.
+    Dönüşte τ_{i,j} = τ_{j,i}. Enkaz–enkaz süresi ancak τ verilmişse okunur.
     """
 
     centers = {center.j for center in instance.centers}

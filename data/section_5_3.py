@@ -1,15 +1,21 @@
 """Çizelge 5.1 ve Bölüm 5.3 (END4902_20261125).
 
-Kişi talebi D yoktur. Enkaz–enkaz τ_{i,i'} ve saat 1, 3, 5, 7, 9, 11 kayıtlarının
-içeriği raporda yoktur; burada da yoktur. Yay kurulmaz, olay uydurulmaz.
+Kişi talebi D yoktur. Saat 1, 3, 5, 7, 9 ve 11 kayıtlarının içeriği raporda
+yoktur; burada da yoktur.
 
 m^U ve m^W, 5.3.1'deki tepe oranlarla türetilir: m^U = 0,3 m^A;
 E_i = 1 ise m^W = 0,5 m^A, değilse 0. İş yükleri üç senaryoda aynıdır.
 β periyoda göre değişmez; beta_t yazılmaz.
+
+Enkaz–enkaz τ_{i,i'} Çizelge 5.1'de yoktur. HYK onayıyla üretilmiş hipotetik
+veri olarak, merkez–enkaz süreleriyle üçgen eşitsizliğine uyan simetrik bir
+tablo üretilir. Yöntem ``hypothetical_site_tau`` ve docs/hipotetik_tau.md
+içindedir. Bu sayılar rapordan okunmuş değildir.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from model.instance import Center, Instance, Scenario, Site, TeamType
@@ -29,6 +35,9 @@ RHO_W = 0.5
 _DAMAGE_RANK = {"Hafif": 1, "Orta": 2, "Ağır": 3}
 _TEAM_RANK = {"hafif": 1, "orta": 2, "agir": 3}
 _GAMMA = {"Hafif": 1, "Orta": 2, "Ağır": 3}
+
+# HYK onayıyla üretilmiş hipotetik veri. Raporun Çizelge 5.1'inde yoktur.
+HYPOTHETICAL_TAU_LABEL = "HYK onayıyla üretilmiş hipotetik veri"
 
 # Çizelge 5.1: i, κ, m^A, E, τ_J1, τ_J2. γ hasar sınıfındandır.
 _TABLE = (
@@ -73,6 +82,59 @@ HYK_KARARI = HykKarari(
 )
 
 
+def round_tenth(value: float) -> float:
+    """Pozitif süre, 0,1 saate. Tam yarıda yukarı (1,25 → 1,3)."""
+
+    return math.floor(value * 10.0 + 0.5 + 1e-9) / 10.0
+
+
+def triangle_bounds(
+    center_tau: dict[tuple[str, str], float],
+    center_ids: list[str],
+    left: str,
+    right: str,
+) -> tuple[float, float]:
+    """τ_{i,i'} için üçgen aralığı: [max_j |τ_ij−τ_i'j|, min_j (τ_ij+τ_i'j)]."""
+
+    lowers = []
+    uppers = []
+    for center in center_ids:
+        first = center_tau[(center, left)]
+        second = center_tau[(center, right)]
+        lowers.append(abs(first - second))
+        uppers.append(first + second)
+    return max(lowers), min(uppers)
+
+
+def hypothetical_site_tau(
+    center_tau: dict[tuple[str, str], float],
+    site_ids: list[str],
+    center_ids: list[str],
+) -> dict[tuple[str, str], float]:
+    """HYK onayıyla üretilmiş hipotetik veri.
+
+    Her çift için aralığın orta noktası 0,1 saate yuvarlanır. Yuvarlama aralığın
+    dışına düşerse, aralıkta kalan en yakın 0,1 saat seçilir. Sonuç simetriktir.
+    """
+
+    found: dict[tuple[str, str], float] = {}
+    for index, left in enumerate(site_ids):
+        for right in site_ids[index + 1 :]:
+            lower, upper = triangle_bounds(center_tau, center_ids, left, right)
+            midpoint = (lower + upper) / 2.0
+            rounded = round_tenth(midpoint)
+            if rounded < lower - 1e-9 or rounded > upper + 1e-9:
+                grid = round_tenth(lower)
+                if grid < lower - 1e-9:
+                    grid = round_tenth(lower + 0.1)
+                if grid > upper + 1e-9:
+                    grid = round_tenth(upper)
+                rounded = grid
+            found[(left, right)] = rounded
+            found[(right, left)] = rounded
+    return found
+
+
 def afad_competency(damage: str, team_k: str) -> int:
     """a_{i,k}. k yetkinliği κ_i'ye eşit ya da daha yüksekse 1."""
 
@@ -99,6 +161,13 @@ def section_5_3() -> Instance:
         )
         tau[("J1", site_i)] = tau_j1
         tau[("J2", site_i)] = tau_j2
+    tau.update(
+        hypothetical_site_tau(
+            tau,
+            [site.i for site in sites],
+            ["J1", "J2"],
+        )
+    )
 
     team_types = [
         TeamType(k="hafif", name="Hafif", A=1, p=1.0),

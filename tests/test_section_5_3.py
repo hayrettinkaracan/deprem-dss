@@ -78,9 +78,9 @@ def test_probabilities_betas_and_no_invented_arcs():
 
     sites = {site.i for site in instance.sites}
     centers = {center.j for center in instance.centers}
-    assert set(instance.tau) == {(center, site) for center in centers for site in sites}
+    center_site = {(center, site) for center in centers for site in sites}
+    assert center_site <= set(instance.tau)
     assert not hasattr(fixture, "REPLAN_EVENTS")
-    assert not hasattr(fixture, "SITE_TO_SITE_TAU")
 
 
 def test_competency_matrix():
