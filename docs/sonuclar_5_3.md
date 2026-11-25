@@ -1,78 +1,93 @@
 # 5.3 planlama sonucu (Z1)
 
-Aşağıdaki sayılar, merkez kopyaları henüz |I|+1 iken tek iş parçacığı ve 40 saniye sınırla alınmış bir ara koşudur. Güncel model, zaman penceresine sığmayan ℓ kopyalarını atar, aynı tür ekiplerin başlangıcını sıralar ve bütün çekirdekleri kullanır. Yeni sayı için:
+Bu dosya `python -m scripts.run_5_3 --mode z1` ile üretildi.
+Amaç yalnız (4.2). (4.28), Z2 ve ε yok.
 
-```bash
-python -m scripts.run_5_3 --mode z1 --time-limit 900 --threads 4 --out docs/sonuclar_5_3.md
+- Durum: Time limit
+- Süre sınırı: 900 s, çekirdek: tümü
+- Çözücü duvar saati: 920.32
+- Z1: 113.74
+- Alt sınır: 39.909
+- CBC aralığı (Z1 − alt sınır) / alt sınır: 1.85
+
+Aralık 0 değilse sonuç kanıtlanmış optimal değildir.
+
+## Senaryo
+
+| Senaryo | Z1_s |
+|---|---:|
+| s1 | 108.67 |
+| s2 | 113.58 |
+| s3 | 120.11 |
+
+## Açık merkezler ve yerleştirme
+
+G = `{'J1': 1, 'J2': 1}`
+V = `{('J1', 'hafif'): 0, ('J1', 'orta'): 1, ('J1', 'agir'): 1, ('J2', 'hafif'): 1, ('J2', 'orta'): 1, ('J2', 'agir'): 0}`
+V^U = `{'J1': 1, 'J2': 2}`
+V^W = `{'J1': 1, 'J2': 1}`
+
+## Zincirler
+
+- hafif-1 s1: σ → o_J2 → (I4,1) → (I4,2) → (J2,2,1) → ω
+- orta-1 s1: σ → o_J1 → (I2,1) → (I2,2) → (J1,3,1) → ω
+- orta-2 s1: σ → o_J2 → (I3,1) → (I3,2) → (J2,2,1) → ω
+- agir-1 s1: σ → o_J1 → (I1,1) → (I1,2) → (I1,3) → (I5,4) → (I5,5) → (I5,6) → (J2,7,1) → ω
+- umke-1 s1: σ → o_J1 → (I1,2) → (I1,3) → (J1,3,1) → (I2,4) → (J1,4,1) → ω
+- umke-2 s1: σ → o_J2 → (I3,2) → (J2,3,1) → (I4,3) → (J2,4,1) → ω
+- umke-3 s1: σ → o_J2 → (J2,1,1) → (J2,2,1) → (J2,3,1) → (J2,4,1) → (I5,5) → (I5,6) → (J2,7,1) → ω
+- makine-1 s1: σ → o_J1 → (I1,1) → (I1,2) → (J1,3,1) → (I2,3) → (I2,4) → (J1,4,1) → ω
+- makine-2 s1: σ → o_J2 → (I5,1) → (I5,2) → (J2,3,1) → ω
+- hafif-1 s2: σ → o_J2 → (I4,1) → (I4,2) → (J2,2,1) → ω
+- orta-1 s2: σ → o_J1 → (I2,1) → (I2,2) → (J1,3,1) → ω
+- orta-2 s2: σ → o_J2 → (I3,1) → (I3,2) → (J2,2,1) → ω
+- agir-1 s2: σ → o_J1 → (I1,1) → (I1,2) → (I1,3) → (I5,4) → (I5,5) → (I5,6) → (J2,7,1) → ω
+- umke-1 s2: σ → o_J1 → (I1,2) → (I1,3) → (J1,3,1) → (I2,4) → (J1,4,1) → ω
+- umke-2 s2: σ → o_J2 → (I3,2) → (J2,3,1) → (I4,3) → (J2,4,1) → ω
+- umke-3 s2: σ → o_J2 → (J2,1,1) → (J2,2,1) → (J2,3,1) → (J2,4,1) → (I5,5) → (I5,6) → (J2,7,1) → ω
+- makine-1 s2: σ → o_J1 → (I1,1) → (I1,2) → (J1,3,1) → (I2,3) → (I2,4) → (J1,4,1) → ω
+- makine-2 s2: σ → o_J2 → (I5,1) → (I5,2) → (J2,3,1) → ω
+- hafif-1 s3: σ → o_J2 → (I4,1) → (I4,2) → (J2,2,1) → ω
+- orta-1 s3: σ → o_J1 → (I2,1) → (I2,2) → (J1,3,1) → ω
+- orta-2 s3: σ → o_J2 → (I3,1) → (I3,2) → (J2,2,1) → ω
+- agir-1 s3: σ → o_J1 → (I1,1) → (I1,2) → (I1,3) → (I5,4) → (I5,5) → (I5,6) → (J2,7,1) → ω
+- umke-1 s3: σ → o_J1 → (I1,2) → (I1,3) → (J1,3,1) → (I2,4) → (J1,4,1) → ω
+- umke-2 s3: σ → o_J2 → (I3,2) → (J2,3,1) → (I4,3) → (J2,4,1) → ω
+- umke-3 s3: σ → o_J2 → (J2,1,1) → (J2,2,1) → (J2,3,1) → (J2,4,1) → (I5,5) → (I5,6) → (J2,7,1) → ω
+- makine-1 s3: σ → o_J1 → (I1,1) → (I1,2) → (J1,3,1) → (I2,3) → (I2,4) → (J1,4,1) → ω
+- makine-2 s3: σ → o_J2 → (I5,1) → (I5,2) → (J2,3,1) → ω
+
+## Çözücü çıktısı
+
 ```
-
-Kaynak: END4902_20261125, Çizelge 5.1 ve (4.2), (4.7)–(4.27), (4.30)–(4.32), (4.34). (4.28), Z2 ve ε bu ara koşuda yok. Amaç yalnız beklenen ağırlıklı kümülatif kalan iştir.
-
-Çözücü: PuLP 2.9.0, CBC 2.10.3, tek iş parçacığı, `gapRel = 0`, süre sınırı 40 saniye. Model 36 periyot, 3 senaryo, 9 ekiptir (yaklaşık 262 bin sütun). CBC kök aramasını bu sürede kapatamadı.
-
-**Durum: süre sınırı. Kanıtlanmış optimal değildir.**
-
-| | |
-|---|---|
-| Z1 (beklenen) | 113.7395 |
-| Alt sınır | 39.902 |
-| CBC aralığı (Z1 − alt sınır) / alt sınır | 1.85 |
-| CBC duvar saati | 56 s |
-
-CBC aralığı 1,85, çözümün alt sınıra yüzde 1,85 yakın olduğu anlamına gelmez. Optimal değer [39.902, 113.740] aralığındadır. Daha iyi bir tamsayı çözüm süre içinde bulunamadı; uydurma bir optimal değer yazılmadı.
-
-## Senaryo amaçları
-
-Aynı yerleşim üç senaryoda ortaktır (4.25). β seyahati uzattığı için periyotlara sığan iş senaryoya göre değişir.
-
-| Senaryo | P | Z1_s |
-|---|---:|---:|
-| s1 iyimser | 0.30 | 108.67 |
-| s2 beklenen | 0.45 | 113.58 |
-| s3 kötümser | 0.25 | 120.11 |
-
-0.30×108.67 + 0.45×113.58 + 0.25×120.11 = 113.7395.
-
-## Açılan merkezler ve yerleştirme
-
-İki merkez de açık: G_J1 = 1, G_J2 = 1.
-
-| | J1 | J2 |
-|---|---:|---:|
-| Hafif | 0 | 1 |
-| Orta | 1 | 1 |
-| Ağır | 1 | 0 |
-| UMKE | 1 | 2 |
-| Makine | 1 | 1 |
-
-## Ziyaret sırası (s1)
-
-Saatler Bas–Bit çözümün içindedir; sıra şöyledir.
-
-| Ekip | Zincir |
-|---|---|
-| hafif-1 | σ → o_J2 → I4 → J2 → ω |
-| orta-1 | σ → o_J1 → I2 → J1 → ω |
-| orta-2 | σ → o_J2 → I3 → J2 → ω |
-| agir-1 | σ → o_J1 → I1 → I5 → J1 → ω |
-| umke-1 | σ → o_J1 → I1 → J1 → I2 → J1 → ω |
-| umke-2 | σ → o_J2 → I3 → J2 → I4 → J2 → ω |
-| umke-3 | σ → o_J2 → J2'de bekler → I5 → J2 → ω |
-| makine-1 | σ → o_J1 → I1 → J1 → I2 → J1 → ω |
-| makine-2 | σ → o_J2 → I5 → J2 → ω |
-
-Bu çözüm 5.3.2'nin bu dilimdeki denetimlerini sağlar: çalışma ile yol çakışmaz, hafif ekip yalnız I4'tedir, makine I3 ve I4'e girmez, ikinci fiziksel giriş yoktur, devam ikinci giriş sayılmaz, q sürelerin toplamıdır, UMKE 0,2 AFAD-saat birikmeden girmez, grup işi bitmeden ayrılış yoktur. ϑ = 0,01, η = 0,2.
-
-## Hipotetik enkaz–enkaz süreleri
-
-**HYK onayıyla üretilmiş hipotetik veri.** Çizelge 5.1'de yoktur. Orta nokta, 0,1 saate, tam yarıda yukarı. Ayrıntı: `docs/hipotetik_tau.md`.
-
-|  | I1 | I2 | I3 | I4 | I5 |
-|---|---:|---:|---:|---:|---:|
-| I1 | — | 0.8 | 1.2 | 1.3 | 1.3 |
-| I2 | 0.8 | — | 1.1 | 1.3 | 1.3 |
-| I3 | 1.2 | 1.1 | — | 0.8 | 1.0 |
-| I4 | 1.3 | 1.3 | 0.8 | — | 1.0 |
-| I5 | 1.3 | 1.3 | 1.0 | 1.0 | — |
-
-β, varış enkazının senaryo gecikmesidir. Merkeze dönüşte güzergâh çıkılan enkazındır. Bu tablodaki bütün çiftlerde, en kötü β = 0,50 ile bile τ(1+β) ≤ 1,95 ≤ 2 olduğundan h = 1'dir.
+Cbc0010I After 100 nodes, 43 on tree, 113.7395 best solution, best possible 39.908503 (150.93 seconds)
+Cbc0010I After 200 nodes, 73 on tree, 113.7395 best solution, best possible 39.908503 (342.71 seconds)
+Cbc0010I After 300 nodes, 97 on tree, 113.7395 best solution, best possible 39.908503 (588.25 seconds)
+Cbc0010I After 400 nodes, 124 on tree, 113.7395 best solution, best possible 39.908503 (859.91 seconds)
+Cbc0030I Thread 0 used 53 times,  waiting to start 1.3306084,  252 locks, 0.048688173 locked, 8.0108643e-05 waiting for locks
+Cbc0030I Thread 1 used 54 times,  waiting to start 8.5442376,  263 locks, 0.058717012 locked, 6.7472458e-05 waiting for locks
+Cbc0030I Thread 2 used 69 times,  waiting to start 25.862386,  331 locks, 0.064759731 locked, 0.00011610985 waiting for locks
+Cbc0030I Thread 3 used 27 times,  waiting to start 17.876069,  130 locks, 0.033046961 locked, 3.7431717e-05 waiting for locks
+Cbc0030I Thread 4 used 34 times,  waiting to start 18.002504,  167 locks, 0.034399748 locked, 4.8398972e-05 waiting for locks
+Cbc0030I Thread 5 used 45 times,  waiting to start 26.558329,  219 locks, 0.043025017 locked, 7.3194504e-05 waiting for locks
+Cbc0030I Thread 6 used 32 times,  waiting to start 23.37712,  154 locks, 0.031981945 locked, 4.2915344e-05 waiting for locks
+Cbc0030I Thread 7 used 34 times,  waiting to start 31.684464,  164 locks, 0.036005259 locked, 4.529953e-05 waiting for locks
+Cbc0030I Thread 8 used 44 times,  waiting to start 20.663253,  215 locks, 0.044070244 locked, 6.7472458e-05 waiting for locks
+Cbc0030I Thread 9 used 38 times,  waiting to start 37.283394,  183 locks, 0.038748503 locked, 6.0558319e-05 waiting for locks
+Cbc0030I Main thread 888.03789 waiting for threads,  867 locks, 0.00086593628 locked, 0.00024080276 waiting for locks
+Cbc0020I Exiting on maximum time
+Cbc0005I Partial search - best objective 113.7395 (best possible 39.908503), took 4790320 iterations and 421 nodes (919.21 seconds)
+Cbc0032I Strong branching done 7598 times (517021 iterations), fathomed 18 nodes and fixed 358 variables
+Cbc0035I Maximum depth 24, 15975 variables fixed on reduced cost
+Cuts at root node changed objective from 39.9048 to 39.9048
+Result - Stopped on time limit
+Objective value:                113.73950000
+Lower bound:                    39.909
+Gap:                            1.85
+Enumerated nodes:               421
+Total iterations:               4790320
+Time (CPU seconds):             8073.28
+Time (Wallclock seconds):       919.83
+Option for printingOptions changed from normal to all
+Total time (CPU seconds):       8073.71   (Wallclock seconds):       920.32
+```
