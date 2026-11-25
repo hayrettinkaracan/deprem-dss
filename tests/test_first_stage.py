@@ -1,4 +1,4 @@
-"""Rapor (4.4)–(4.10) ve Çizelge 5.1."""
+"""Eski çözücü (4.4)–(4.10). Girdi legacy fixture'dır; yeni Çizelge 5.1 ayrı testte."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import pulp
 import pytest
 
-from data.section_5_3 import PERIODS, TAU, section_5_3
+from data.legacy_section_5_3 import PERIODS, TAU, legacy_section_5_3 as section_5_3
 from model.checks import violations
 from model.instance import h_matrix, route_open
 from model.planning_inputs import build_live_instance

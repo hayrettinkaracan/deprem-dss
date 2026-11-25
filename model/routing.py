@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 
 import pulp
 
-from model.instance import Instance, competency, validate
+from model.instance import Instance, competency, require_legacy_demand, validate
 from model.seed import apply_seed, build_seed
 from model.network import (
     REPORT_PERIODS,
@@ -230,6 +230,8 @@ def _optimize(
 
 
 def _build(instance: Instance, network: Network, reentry_ban: bool):
+    # Eski amaç Σ P u. Yeni Z1 (4.2) sonraki kalemde bunu değiştirir.
+    require_legacy_demand(instance)
     centers = instance.centers
     types = instance.team_types
     sites = instance.sites

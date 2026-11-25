@@ -1,4 +1,4 @@
-"""Rapor (4.18)–(4.33), (4.36)–(4.39) ve Çizelge 5.1."""
+"""Eski zincir çözücüsü. Girdi legacy fixture'dır; yeni Çizelge 5.1 ayrı testte."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 import pulp
 import pytest
 
-from data.section_5_3 import PERIODS, section_5_3
+from data.legacy_section_5_3 import PERIODS, legacy_section_5_3 as section_5_3
 from model.chain_checks import chain_violations
 from model.instance import Center, Instance, Scenario, Site, TeamType
 from model.network import REPORT_PERIODS, build_network, route_h, travel_sey

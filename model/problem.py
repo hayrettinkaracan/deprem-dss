@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import pulp
 
-from model.instance import Instance, competency, h_matrix, validate
+from model.instance import Instance, competency, h_matrix, require_legacy_demand, validate
 
 PRIMARY_LOCK_TOL = 1e-4
 
@@ -99,6 +99,8 @@ def _optimize(
 
 
 def _build(instance: Instance, usable: dict[tuple[str, str, str], int]):
+    # Eski amaç Σ P u. Yeni Z1 (4.2) sonraki kalemde bunu değiştirir.
+    require_legacy_demand(instance)
     centers = instance.centers
     types = instance.team_types
     sites = instance.sites

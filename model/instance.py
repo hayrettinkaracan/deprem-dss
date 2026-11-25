@@ -36,7 +36,11 @@ class TeamType:
 
 @dataclass(frozen=True)
 class Site:
-    """Enkaz i. m = m_i (ekip-saat), E = E_i. Talep senaryodadır."""
+    """Enkaz i.
+
+    m = m^A (AFAD-saat). m_U ve m_W grup işleridir; eski model ikisini okumaz.
+    gamma = γ_i. E = E_i.
+    """
 
     i: str
     name: str
@@ -45,6 +49,9 @@ class Site:
     damage: str = ""
     lat: float | None = None
     lon: float | None = None
+    gamma: float | None = None
+    m_U: float | None = None
+    m_W: float | None = None
 
 
 @dataclass(frozen=True)
@@ -58,7 +65,8 @@ class Scenario:
     s: str
     name: str
     P: float
-    D: dict[str, float]
+    # Eski modelin kişi talebi. Yeni Çizelge 5.1'de yoktur; o fixture None verir.
+    D: dict[str, float] | None
     beta: dict[str, float]
     beta_t: dict[tuple[str, int], float] | None = None
 
@@ -81,6 +89,19 @@ class Instance:
     W_top: int
     L: float = 2.0
     a: dict[tuple[str, str], int] | None = field(default=None)
+
+
+def require_legacy_demand(instance: Instance) -> None:
+    """Eski u amacı kişi talebi D okur. Yeni Çizelge 5.1 bu alanı taşımaz."""
+
+    missing = [scenario.s for scenario in instance.scenarios if scenario.D is None]
+    if missing:
+        joined = ", ".join(missing)
+        raise ValueError(
+            "Bu çözücü eski kişi talebi D bekler "
+            f"({joined}). Yeni Çizelge 5.1'de D yoktur; "
+            "eski girdi data.legacy_section_5_3.legacy_section_5_3() içindedir."
+        )
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -172,7 +193,7 @@ def validate(instance: Instance) -> None:
         if scenario.P < 0:
             raise ValueError(f"P_{scenario.s} negatif olamaz")
         for site in instance.sites:
-            if site.i not in scenario.D or scenario.D[site.i] < 0:
+            if scenario.D is not None and (site.i not in scenario.D or scenario.D[site.i] < 0):
                 raise ValueError(f"D_{{{site.i},{scenario.s}}} tanımlı olmalı")
             if site.i not in scenario.beta or scenario.beta[site.i] < 0:
                 raise ValueError(f"beta_{{{site.i},{scenario.s}}} tanımlı olmalı")
