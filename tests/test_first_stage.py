@@ -189,5 +189,10 @@ def test_app_delegates_the_model():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "LpProblem" not in source
     assert "LpVariable" not in source
-    assert "solve_team_to_site" in source
-    assert "solve_first_stage" in source
+    assert "calistir_plan" in source
+    assert "olay_guncelle" in source
+    assert "Plan çözülüyor" in source
+    live = (ROOT / "model" / "live_plan.py").read_text(encoding="utf-8")
+    assert "solve_planning" in live
+    assert "solve_operational" in live
+    assert "dispatch_target" in live

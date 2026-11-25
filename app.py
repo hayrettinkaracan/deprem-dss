@@ -19,10 +19,13 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client
 
-from model.legacy_assignment import solve_team_to_site
-from model.planning_inputs import build_live_instance, plan_view
-from model.problem import solve_first_stage
-from model.routing import CHAIN_CAPTION, chain_rows, solve_team_chains
+from model.live_plan import (
+    PlanGirdiHatasi,
+    calistir_plan,
+    guvenli_hata,
+    olay_guncelle,
+    plan_oku,
+)
 
 READ_CACHE_TTL_SECONDS = 20
 TALEP_UST_SINIR = 1_000_000
@@ -337,7 +340,8 @@ def talep_metni(value):
         return "—"
     if not math.isfinite(sayi):
         return "—"
-    return f"{sayi:.1f} kişi"
+    # Kayıt kişi talebidir. Kesirli kişi okunmaz; en yakın tam sayı gösterilir.
+    return f"{round(sayi):.0f} kişi"
 
 
 def gecen_sure(baslangic, simdi=None):
@@ -899,83 +903,152 @@ def render_son_atama():
     son = st.session_state.get("son_atama")
     if not son:
         return
-    {"success": st.success, "warning": st.warning, "error": st.error, "info": st.info}[son["level"]](son["mesaj"])
-    if son.get("satirlar"):
-        st.dataframe(
-            pd.DataFrame(son["satirlar"]),
-            hide_index=True,
-            column_config={
-                "Ekip": st.column_config.TextColumn("Ekip"),
-                "Enkaz": st.column_config.TextColumn("Enkaz"),
-                "Etkin kapasite (kişi)": st.column_config.NumberColumn(
-                    "Etkin kapasite (kişi)",
-                    format="%.1f",
-                    help="Kapasite / (1+β)",
-                ),
-            },
-        )
-    if son.get("kapali"):
-        st.caption("Kapalı yol nedeniyle atama yapılmayan enkazlar: " + ", ".join(son["kapali"]))
+    {"success": st.success, "warning": st.warning, "error": st.error, "info": st.info}[son["level"]](
+        son["mesaj"]
+    )
 
 
-def _zinciri_kaydet(plan_instance):
+def _plan_sayi(value):
+    if value is None:
+        return "—"
     try:
-        chain_solution = solve_team_chains(plan_instance, time_limit=20)
-    except Exception as exc:
-        st.session_state["chain_error"] = str(exc)
-        st.session_state.pop("chain_view", None)
-        return
-    if chain_solution.status != "Optimal":
-        st.session_state["chain_error"] = f"Zincir çözümü {chain_solution.status}"
-        st.session_state.pop("chain_view", None)
-        return
-    st.session_state["chain_view"] = {
-        "objective": chain_solution.objective,
-        "caption": CHAIN_CAPTION,
-        "rows": chain_rows(plan_instance, chain_solution),
-    }
-    st.session_state.pop("chain_error", None)
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not math.isfinite(number):
+        return "—"
+    return f"{number:.4g}"
 
 
-def render_birinci_asama():
-    if st.session_state.get("plan_error"):
-        st.warning(f"Birinci aşama planı kurulamadı: {st.session_state['plan_error']}")
-    view = st.session_state.get("plan_view")
-    if not view:
-        return
-    st.subheader("Birinci aşama planı (G, V, V^U, V^W)")
-    st.caption(view["caption"])
-    col_obj, col_open, col_teams = st.columns(3)
-    col_obj.metric("Beklenen karşılanmayan talep", f"{view['objective']:.1f}")
-    col_open.metric("Açık merkez", view["open_count"])
-    col_teams.metric("Ön konumlanan ekip", view["team_count"])
-    frame = pd.DataFrame(view["rows"])
-    if "Açık" in frame.columns:
-        frame["Açık"] = frame["Açık"].map(
-            lambda value: {"evet": "Evet", "hayır": "Hayır"}.get(str(value).lower(), value)
-        )
-    config = {
-        "Merkez": st.column_config.TextColumn("Merkez"),
-        "Açık": st.column_config.TextColumn("Açık"),
-        "UMKE": st.column_config.NumberColumn("UMKE", format="%d"),
-        "İş makinesi": st.column_config.NumberColumn("İş makinesi", format="%d"),
-    }
-    for column in frame.columns:
-        if column not in config and pd.api.types.is_numeric_dtype(frame[column]):
-            config[column] = st.column_config.NumberColumn(column, format="%d")
+def _olcu(kolon, etiket, deger):
+    """Metrik. Değer satır kırar; dar ekranda kesilmez."""
+
+    kolon.html(
+        "<div style='margin:0 0 0.75rem 0'>"
+        "<div style='font-size:0.85rem;line-height:1.2'>"
+        + html.escape(str(etiket))
+        + "</div>"
+        "<div style='font-size:1.15rem;font-weight:600;line-height:1.3;overflow-wrap:anywhere'>"
+        + html.escape(str(deger))
+        + "</div></div>"
+    )
+
+
+def _plan_yuzde(value):
+    """Aralık oranıdır: (üst − alt) / |alt|. Ekranda yüzde."""
+
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if not math.isfinite(number):
+        return "—"
+    return f"{number * 100:.4g}%"
+
+
+def _metin_tablosu(rows):
+    frame = pd.DataFrame(rows)
+    config = {column: st.column_config.TextColumn(column) for column in frame.columns}
     st.dataframe(frame, hide_index=True, column_config=config)
-    if view["opened_names"]:
-        st.success("Açılan merkezler: " + ", ".join(view["opened_names"]))
+
+
+def render_plan():
+    ozet = st.session_state.get("plan_ozet")
+    if not isinstance(ozet, dict):
+        return
+    st.subheader("Plan sonucu")
+    st.caption(ozet.get("caption") or "")
+    st.html(
+        "<style>"
+        ".st-key-plan_olculer [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;}"
+        ".st-key-plan_olculer [data-testid='stColumn']{min-width:0 !important;}"
+        "</style>"
+    )
+    with st.container(key="plan_olculer"):
+        sol, sag = st.columns(2)
+        _olcu(sol, "Durum", ozet.get("durum") or "—")
+        _olcu(sag, "Z1", _plan_sayi(ozet.get("z1")))
+        sol, sag = st.columns(2)
+        _olcu(sol, "Alt sınır", _plan_sayi(ozet.get("alt_sinir")))
+        _olcu(sag, "MIP aralığı", _plan_yuzde(ozet.get("aralik")))
+    if ozet.get("uyari"):
+        st.warning(ozet["uyari"])
+    if ozet.get("kayit_uyari"):
+        st.warning(ozet["kayit_uyari"])
+    if ozet.get("acik_adlar"):
+        st.success("Açık merkezler: " + ", ".join(ozet["acik_adlar"]))
+    elif ozet.get("uyari"):
+        st.info("Açık merkez listesi yok.")
     else:
         st.info("Plan hiçbir merkezi açmadı.")
-    if st.session_state.get("chain_error"):
-        st.warning(f"Ekip zinciri kurulamadı: {st.session_state['chain_error']}")
-    chain_view = st.session_state.get("chain_view")
-    if chain_view:
-        st.subheader("Ekip zincirleri (Y)")
-        st.caption(chain_view["caption"])
-        st.metric("Zincir modeli amaç", f"{chain_view['objective']:.1f}")
-        st.dataframe(pd.DataFrame(chain_view["rows"]), hide_index=True)
+    if ozet.get("merkez_satirlari"):
+        st.subheader("Merkezler")
+        frame = pd.DataFrame(ozet["merkez_satirlari"])
+        config = {
+            "Merkez": st.column_config.TextColumn("Merkez"),
+            "Açık": st.column_config.TextColumn("Açık"),
+            "Arama-kurtarma": st.column_config.NumberColumn("Arama-kurtarma", format="%d"),
+            "UMKE": st.column_config.NumberColumn("UMKE", format="%d"),
+            "İş makinesi": st.column_config.NumberColumn("İş makinesi", format="%d"),
+        }
+        st.dataframe(frame, hide_index=True, column_config=config)
+    if ozet.get("yerlesim"):
+        st.subheader("Yerleştirme")
+        _metin_tablosu(ozet["yerlesim"])
+    if ozet.get("program"):
+        st.subheader("Ziyaret programı")
+        frame = pd.DataFrame(ozet["program"])
+        st.dataframe(
+            frame,
+            hide_index=True,
+            column_config={
+                "Ekip": st.column_config.TextColumn("Ekip", width=120),
+                "Periyot": st.column_config.TextColumn("Periyot", width=70),
+                "Yer": st.column_config.TextColumn("Yer", width=150),
+            },
+        )
+
+
+def render_plan_ozeti():
+    """Durum sekmesi: tabloların kısa hali."""
+
+    ozet = st.session_state.get("plan_ozet")
+    if not isinstance(ozet, dict):
+        return
+    st.subheader("Son plan")
+    acik = ", ".join(ozet.get("acik_adlar") or []) or "—"
+    st.caption(
+        f"{ozet.get('durum') or '—'}. Z1 {_plan_sayi(ozet.get('z1'))}. "
+        f"MIP aralığı {_plan_yuzde(ozet.get('aralik'))}. Açık merkezler: {acik}."
+    )
+
+
+def _plan_oturuma(ozet):
+    st.session_state["plan_ozet"] = ozet
+    st.session_state["son_atama"] = {
+        "level": ozet.get("level") or "info",
+        "mesaj": ozet.get("mesaj") or "",
+    }
+
+
+def _olay_sonrasi(db):
+    """Kayıtlı plan varsa operasyonel çözümü çalıştırır. Plan yoksa hiçbir şey yapmaz."""
+
+    yedek = st.session_state.get("plan_ozet")
+    if not isinstance(yedek, dict):
+        yedek = plan_oku(db)
+    if not isinstance(yedek, dict):
+        return
+    try:
+        with st.spinner("Hedefler güncelleniyor…"):
+            ozet = olay_guncelle(db, yedek=yedek)
+    except Exception as exc:
+        flash("warning", guvenli_hata(exc))
+        return
+    if isinstance(ozet, dict):
+        _plan_oturuma(ozet)
 
 
 def _rol_secimi():
@@ -1105,6 +1178,7 @@ def _ekip_aktif(db, refresh, ekip_id, secilen, gorev, yardimci):
                 format_dt(bit),
             ),
         }
+        _olay_sonrasi(db)
         st.rerun()
 
 
@@ -1125,8 +1199,9 @@ def _ekip_paneli(db, fetch, refresh, auth):
     secilen = bulunan[0]
     _kimlik_satiri(secilen)
     if gorev is not None:
-        eski = st.session_state.get("gorev_sonuc")
-        if isinstance(eski, dict) and eski.get("ekip_id") == ekip_id:
+        sonuc = st.session_state.get("gorev_sonuc")
+        if isinstance(sonuc, dict) and sonuc.get("ekip_id") == ekip_id and sonuc.get("metin"):
+            st.success(sonuc["metin"])
             st.session_state.pop("gorev_sonuc", None)
         _ekip_aktif(db, refresh, ekip_id, secilen, gorev, yardimci)
         return
@@ -1234,8 +1309,6 @@ def main():
             _ekip_giris(ekipler, getattr(db, "is_memory", False))
     elif rol == "Admin":
         st.header("Admin Paneli")
-        render_son_atama()
-        render_birinci_asama()
         tab_enkaz, tab_ekip, tab_atama, tab_durum = st.tabs(
             ["Enkazlar", "Ekipler", "Atama Çalıştır", "Durum"]
         )
@@ -1300,6 +1373,7 @@ def main():
                         ).execute()
                         refresh()
                         flash("success", "Enkaz eklendi")
+                        _olay_sonrasi(db)
                         st.rerun()
 
             st.subheader("Avcılar örnek verisi")
@@ -1321,6 +1395,7 @@ def main():
                     db.table("enkazlar").insert(_avcilar_satirlari(ustune=True)).execute()
                     refresh()
                     flash("success", "Yeni Avcılar enkazları eklendi (eskiler duruyor)")
+                    _olay_sonrasi(db)
                     st.rerun()
             if st.session_state.get(_CONFIRM_AVCILAR):
                 st.warning(
@@ -1335,6 +1410,7 @@ def main():
                         st.session_state[_CONFIRM_AVCILAR] = False
                         refresh()
                         flash("success", "Eski Avcılar kayıtları silindi, yenileri eklendi")
+                        _olay_sonrasi(db)
                         st.rerun()
                 with vazgec_col:
                     if st.button("Vazgeç", key="avcilar_sil_vazgec"):
@@ -1412,136 +1488,94 @@ def main():
             show_ekip_tablosu(fetch("ekipler", "*"))
 
         with tab_atama:
-            st.subheader("Atama Optimizasyonu")
-            senaryo = st.selectbox(
-                "Senaryo",
-                ["İyimser", "Baz", "Kötümser"],
-                key="senaryo",
-                help=(
-                    "Operasyonel atamada β etkin kapasiteyi düşürür: kapasite / (1+β). "
-                    "h, yolun açık olma olasılığıdır; çekilişte h=0 çıkan enkaza atama yapılmaz. "
-                    "Birinci aşama planı üç rapor senaryosunu birlikte çözer; orada β yol gecikmesidir. "
-                    "İyimser β=0,2 ve h≈0,9. Baz β=0,5 ve h≈0,7. Kötümser β=1,0 ve h≈0,4."
-                ),
+            st.subheader("Atama")
+            st.number_input(
+                "Periyot sayısı",
+                key="plan_periyot",
+                min_value=1,
+                max_value=36,
+                value=10,
+                step=1,
+                help="Plan ufkundaki periyot adedi. Varsayılan 10. Her periyot 2 saattir.",
             )
-            beta = {"İyimser": 0.2, "Baz": 0.5, "Kötümser": 1.0}[senaryo]
-            h_orani = {"İyimser": 0.9, "Baz": 0.7, "Kötümser": 0.4}[senaryo]
-            st.caption(f"β = {beta} | Açık yol oranı h ≈ {h_orani}")
-            st.caption(
-                "Operasyonel atama seçilen senaryoyu eski kapasite çarpanıyla Supabase'e yazar. "
-                "Birinci aşama planı rapor senaryolarını birlikte çözer; β orada yol gecikmesidir."
+            st.number_input(
+                "Süre sınırı (saniye)",
+                key="plan_sure",
+                min_value=1,
+                max_value=900,
+                value=120,
+                step=1,
+                help="Çözücünün saniye sınırı. Varsayılan 120 saniye.",
             )
             if st.button(
-                "Atamayı Çalıştır (PuLP ile)",
+                "Atamayı Çalıştır",
                 key="atama_calistir",
-                help="Müsait arama-kurtarma ekiplerini, yolu açık görünen aktif enkazlara atar ve birinci aşama planını çözer.",
+                help="Yeni planlama modelini çalıştırır. Müsait ekiplerin hedefi yazılır. Devam eden atamalar kapanmaz.",
             ):
-                enkazlar = pd.DataFrame(
-                    fetch_now("enkazlar", "*", (("eq", "durum", "aktif"),))
-                )
-                ekipler = pd.DataFrame(
-                    fetch_now(
-                        "ekipler",
-                        "*",
-                        (("eq", "durum", "musait"), ("eq", "tip", "Arama-Kurtarma")),
-                    )
-                )
-                if len(enkazlar) == 0 or len(ekipler) == 0:
-                    st.session_state["son_atama"] = {
-                        "level": "warning",
-                        "mesaj": "Aktif enkaz veya müsait Arama-Kurtarma ekibi yok",
-                        "satirlar": [],
-                        "kapali": [],
-                    }
-                    st.session_state.pop("plan_view", None)
-                    st.session_state.pop("plan_error", None)
-                    st.session_state.pop("chain_view", None)
-                    st.session_state.pop("chain_error", None)
-                else:
-                    enkazlar["h"] = [1 if random.random() < h_orani else 0 for _ in range(len(enkazlar))]
-                    acik_enkazlar = enkazlar[enkazlar["h"] == 1]
-                    kapali_isimler = [str(isim) for isim in enkazlar.loc[enkazlar["h"] == 0, "isim"].tolist()]
-                    if len(acik_enkazlar) == 0:
-                        st.session_state["son_atama"] = {
-                            "level": "warning",
-                            "mesaj": "Bu senaryoda tüm yollar kapalı (h=0)",
-                            "satirlar": [],
-                            "kapali": kapali_isimler,
-                        }
-                    else:
-                        team_rows = modelsiz_ekip(ekipler.to_dict("records"))
-                        site_rows = acik_enkazlar.to_dict("records")
-                        result = solve_team_to_site(team_rows, site_rows, beta)
-                        if result.status == "Optimal":
-                            atanan = 0
-                            satirlar = []
-                            team_by_id = {team["id"]: team for team in team_rows}
-                            site_by_id = {site["id"]: site for site in site_rows}
-                            for assignment in result.assignments:
-                                team = team_by_id[assignment.ekip_id]
-                                site = site_by_id[assignment.enkaz_id]
-                                bas = datetime.now().isoformat()
-                                db.table("atamalar").insert({
-                                    "ekip_id": int(team["id"]),
-                                    "enkaz_id": int(site["id"]),
-                                    "baslangic": bas,
-                                    "durum": "devam",
-                                }).execute()
-                                db.table("ekipler").update({"durum": "meşgul"}).eq("id", int(team["id"])).execute()
-                                yeni_talep = max(0, site["talep"] - assignment.etkin_kapasite)
-                                db.table("enkazlar").update({
-                                    "talep": yeni_talep,
-                                    "durum": "tamam" if yeni_talep <= 0 else "aktif",
-                                }).eq("id", int(site["id"])).execute()
-                                atanan += 1
-                                satirlar.append(
-                                    {
-                                        "Ekip": f"{team['isim']} (#{int(team['id'])})",
-                                        "Enkaz": f"{site['isim']} (#{int(site['id'])})",
-                                        "Etkin kapasite (kişi)": round(float(assignment.etkin_kapasite), 1),
-                                    }
-                                )
-                            st.session_state["son_atama"] = {
-                                "level": "success",
-                                "mesaj": (
-                                    f"{atanan} ekip atandı | β={beta} | "
-                                    f"Kapalı yol: {len(enkazlar) - len(acik_enkazlar)} enkaz"
-                                ),
-                                "satirlar": satirlar,
-                                "kapali": kapali_isimler,
-                            }
-                        else:
-                            st.session_state["son_atama"] = {
-                                "level": "error",
-                                "mesaj": "Model çözülemedi",
-                                "satirlar": [],
-                                "kapali": [],
-                            }
-                    try:
-                        plan_instance = build_live_instance(
-                            enkazlar.to_dict("records"),
-                            modelsiz_ekip(ekipler.to_dict("records")),
+                try:
+                    with st.spinner("Plan çözülüyor…"):
+                        ozet = calistir_plan(
+                            db,
+                            fetch_now("enkazlar", "*"),
+                            modelsiz_ekip(fetch_now("ekipler", "*")),
+                            int(st.session_state.get("plan_periyot") or 10),
+                            int(st.session_state.get("plan_sure") or 120),
+                            threads=2,
                         )
-                        plan_solution = solve_first_stage(plan_instance)
-                        if plan_solution.status != "Optimal":
-                            st.session_state["plan_error"] = f"Plan çözümü {plan_solution.status}"
-                            st.session_state.pop("plan_view", None)
-                            st.session_state.pop("chain_view", None)
-                            st.session_state.pop("chain_error", None)
-                        else:
-                            st.session_state["plan_view"] = plan_view(plan_instance, plan_solution)
-                            st.session_state.pop("plan_error", None)
-                            _zinciri_kaydet(plan_instance)
-                    except Exception as exc:
-                        st.session_state["plan_error"] = str(exc)
-                        st.session_state.pop("plan_view", None)
-                        st.session_state.pop("chain_view", None)
-                        st.session_state.pop("chain_error", None)
+                except PlanGirdiHatasi as exc:
+                    st.session_state["son_atama"] = {"level": "warning", "mesaj": str(exc)}
+                    st.session_state.pop("plan_ozet", None)
+                except Exception as exc:
+                    st.session_state["son_atama"] = {"level": "error", "mesaj": guvenli_hata(exc)}
+                    st.session_state.pop("plan_ozet", None)
+                else:
+                    _plan_oturuma(ozet)
                 refresh()
                 st.rerun()
-            st.info("Not: h=0 olan enkazlara atama yapılmaz. β etkin kapasiteyi düşürür. Tamamlanmış atamalar korunur.")
+            if st.button(
+                "Operasyonel yeniden çöz",
+                key="operasyon_calistir",
+                help="Açık merkezleri sabit tutar ve görevi olmayan ekiplerin hedefini günceller.",
+            ):
+                yedek = st.session_state.get("plan_ozet")
+                if not isinstance(yedek, dict):
+                    yedek = plan_oku(db)
+                if not isinstance(yedek, dict):
+                    st.session_state["son_atama"] = {
+                        "level": "info",
+                        "mesaj": "Kayıtlı plan yok. Önce atamayı çalıştırın.",
+                    }
+                else:
+                    try:
+                        with st.spinner("Hedefler güncelleniyor…"):
+                            ozet = olay_guncelle(
+                                db,
+                                yedek=yedek,
+                                periods=int(st.session_state.get("plan_periyot") or yedek.get("periyot") or 10),
+                                time_limit=int(st.session_state.get("plan_sure") or yedek.get("sure") or 120),
+                                threads=2,
+                            )
+                    except Exception as exc:
+                        st.session_state["son_atama"] = {"level": "error", "mesaj": guvenli_hata(exc)}
+                    else:
+                        if isinstance(ozet, dict):
+                            _plan_oturuma(ozet)
+                        else:
+                            st.session_state["son_atama"] = {
+                                "level": "info",
+                                "mesaj": "Kayıtlı plan yok. Önce atamayı çalıştırın.",
+                            }
+                refresh()
+                st.rerun()
+            st.info(
+                "Yeni enkaz eklenince veya bir ekip görevini bitirince operasyonel çözüm kendiliğinden çalışır. "
+                "Tamamlanmış atamalar korunur."
+            )
+            render_son_atama()
+            render_plan()
 
         with tab_durum:
+            render_plan_ozeti()
             st.subheader("Aktif Atamalar (Devam Eden)")
             show_atama_tablosu(
                 fetch("atamalar", ATAMA_SELECT, (("eq", "durum", "devam"),)),
