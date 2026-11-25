@@ -87,9 +87,12 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("aktif", haritalar[0].proto.alt)
         for widget in (*at.text_input, *at.number_input, *at.selectbox, *at.checkbox):
             self.assertTrue(str(widget.label).strip())
-        senaryo = at.selectbox(key="senaryo")
-        self.assertIn("β", senaryo.help)
-        self.assertIn("h", senaryo.help)
+        periyot = at.number_input(key="plan_periyot")
+        sure = at.number_input(key="plan_sure")
+        self.assertIn("periyot", periyot.help.lower())
+        self.assertIn("saniye", sure.help.lower())
+        self.assertEqual(periyot.value, 10)
+        self.assertEqual(sure.value, 120)
         self.assertIn("-90", at.number_input(key="enkaz_enlem").help)
         self.assertIn("kişi", at.number_input(key="enkaz_talep").help.lower())
 
@@ -98,7 +101,7 @@ class SmokeTests(unittest.TestCase):
         assert_clean(self, at)
         ilk = at.session_state["memory_db"].select_count
         self.assertGreater(ilk, 0)
-        at.selectbox(key="senaryo").set_value("Baz").run()
+        at.number_input(key="plan_periyot").set_value(8).run()
         assert_clean(self, at)
         self.assertEqual(at.session_state["memory_db"].select_count, ilk)
 
@@ -208,36 +211,35 @@ class SmokeTests(unittest.TestCase):
 
     def test_atama_ozeti_rerun_sonrasi_durur(self):
         at = admin_giris(self.app())
-        at.button(key="atama_calistir").click().run(timeout=60)
+        at.number_input(key="plan_periyot").set_value(2)
+        at.number_input(key="plan_sure").set_value(12)
+        at.button(key="atama_calistir").click().run(timeout=40)
         assert_clean(self, at)
-        def sonuc_metinleri(agac):
-            metin = "\n".join(alerts(agac))
-            return metin
 
-        metin = sonuc_metinleri(at)
-        self.assertTrue(
-            any(parca in metin for parca in ("ekip atandı", "yollar kapalı", "Model çözülemedi", "müsait Arama-Kurtarma"))
+        def sonuc_metinleri(agac):
+            return "\n".join(alerts(agac))
+
+        parcalar = (
+            "Plan hazır",
+            "Süre sınırı içinde uygun",
+            "Plan çözülemedi",
+            "müsait Arama-Kurtarma",
         )
+        metin = sonuc_metinleri(at)
+        self.assertTrue(any(parca in metin for parca in parcalar))
         at.run()
         assert_clean(self, at)
         metin_sonra = sonuc_metinleri(at)
-        self.assertTrue(
-            any(
-                parca in metin_sonra
-                for parca in ("ekip atandı", "yollar kapalı", "Model çözülemedi", "müsait Arama-Kurtarma")
-            )
-        )
-        if "ekip atandı" in metin_sonra and not metin_sonra.strip().startswith("0 ekip"):
-            ozet = frame_with(at, "Etkin kapasite (kişi)")
-            self.assertIn("Ekip", ozet.columns)
-            self.assertIn("Enkaz", ozet.columns)
+        self.assertTrue(any(parca in metin_sonra for parca in parcalar))
+        if "Plan hazır" in metin_sonra:
+            ozet = frame_with(at, "Ekip")
+            self.assertIn("Merkez", ozet.columns)
             self.assertGreater(len(ozet), 0)
-            self.assertTrue(ozet["Ekip"].str.contains("#").all())
-            self.assertTrue(ozet["Enkaz"].str.contains("#").all())
+            self.assertTrue(ozet["Ekip"].str.contains("#").any() or ozet["Ekip"].str.contains("UMKE").any())
         basliklar = [el.value for el in at.subheader]
         self.assertTrue(
-            any(baslik.startswith("Birinci aşama planı") for baslik in basliklar)
-            or any("Birinci aşama planı kurulamadı" in m for m in alerts(at))
+            any(baslik == "Plan sonucu" for baslik in basliklar)
+            or any("Plan çözülemedi" in m or "müsait Arama-Kurtarma" in m for m in alerts(at))
         )
 
 

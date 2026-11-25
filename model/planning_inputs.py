@@ -17,6 +17,10 @@ LIVE_SPEED_KMH = 30.0
 LIVE_N_MAX = 2
 LIVE_U_TOP = 3
 LIVE_W_TOP = 2
+# 5.3.1 tepe oranları. Canlı kayıtta hasar sınıfı yoktur; γ nötr 1'dir.
+LIVE_RHO_U = 0.3
+LIVE_RHO_W = 0.5
+LIVE_GAMMA = 1.0
 LIVE_CENTERS = (
     ("J1", "Avcılar Belediye Koordinasyon", 40.9790, 28.7210),
     ("J2", "Ambarlı Lojistik", 40.9605, 28.6855),
@@ -32,18 +36,77 @@ PLAN_CAPTION = (
 )
 
 
-def build_live_instance(enkaz_rows: list[dict], ekip_rows: list[dict]) -> Instance:
+def build_live_instance(
+    enkaz_rows: list[dict],
+    ekip_rows: list[dict],
+    u_top: int | None = None,
+    w_top: int | None = None,
+) -> Instance:
     sites = [_site_from_row(row) for row in sorted(enkaz_rows, key=lambda row: row["id"])]
-    team_types = _team_types(ekip_rows)
+    return _assemble(sites, _team_types(ekip_rows), u_top, w_top)
+
+
+def ekip_tipi(ekip_id: int) -> str:
+    """Tek ekibin tip anahtarı. Kaynak kimliği ``{anahtar}-1`` olur."""
+
+    return f"e{int(ekip_id)}"
+
+
+def build_planning_instance(
+    enkaz_rows: list[dict],
+    ekip_rows: list[dict],
+    u_top: int | None = None,
+    w_top: int | None = None,
+) -> tuple[Instance, list[tuple[dict, str]]]:
+    """Her ekip ayrı tiptir; kimlik ekip numarasına bağlıdır, kadro sırasına değil.
+
+    ``planning_staff`` üretkenliği 1 yapar. Kapasite alanı tipin p değerinde durur,
+    yeni modelin p_r değeri değildir.
+    """
+
+    sites = [_site_from_row(row) for row in sorted(enkaz_rows, key=lambda row: int(row["id"]))]
+    roster: list[tuple[dict, str]] = []
+    types: list[TeamType] = []
+    for row in sorted(ekip_rows, key=lambda item: int(item["id"])):
+        if row.get("kapasite") is None:
+            continue
+        key = ekip_tipi(int(row["id"]))
+        types.append(
+            TeamType(
+                k=key,
+                name=str(row.get("isim") or key),
+                A=1,
+                p=float(row["kapasite"]),
+            )
+        )
+        roster.append((row, f"{key}-1"))
+    return _assemble(sites, types, u_top, w_top), roster
+
+
+def _assemble(
+    sites: list[Site],
+    team_types: list[TeamType],
+    u_top: int | None,
+    w_top: int | None,
+) -> Instance:
     capacity = {team.k: team.A for team in team_types}
+    umke = LIVE_U_TOP if u_top is None else u_top
+    machine = LIVE_W_TOP if w_top is None else w_top
     centers = [
-        Center(j=key, name=name, C=dict(capacity), U_max=LIVE_U_TOP, W_max=LIVE_W_TOP)
+        Center(j=key, name=name, C=dict(capacity), U_max=umke, W_max=machine)
         for key, name, _lat, _lon in LIVE_CENTERS
     ]
-    tau = {}
+    tau: dict[tuple[str, str], float] = {}
     for key, _name, lat, lon in LIVE_CENTERS:
         for site in sites:
             tau[(key, site.i)] = haversine_km(lat, lon, site.lat, site.lon) / LIVE_SPEED_KMH
+    for left in sites:
+        for right in sites:
+            if left.i == right.i or left.lat is None or right.lat is None:
+                continue
+            tau[(left.i, right.i)] = (
+                haversine_km(left.lat, left.lon, right.lat, right.lon) / LIVE_SPEED_KMH
+            )
     return Instance(
         centers=centers,
         team_types=team_types,
@@ -51,8 +114,8 @@ def build_live_instance(enkaz_rows: list[dict], ekip_rows: list[dict]) -> Instan
         scenarios=_live_scenarios(sites),
         tau=tau,
         N_max=LIVE_N_MAX,
-        U_top=LIVE_U_TOP,
-        W_top=LIVE_W_TOP,
+        U_top=umke,
+        W_top=machine,
         L=2.0,
     )
 
@@ -112,7 +175,17 @@ def _site_from_row(row: dict) -> Site:
         raise ValueError(f"Enkaz {row.get('id')} talebi pozitif olmalı")
     machine = 1 if row.get("makine_gerekli") else 0
     name = str(row.get("isim") or row["id"])
-    return Site(i=str(row["id"]), name=name, m=demand, E=machine, lat=lat, lon=lon)
+    return Site(
+        i=str(row["id"]),
+        name=name,
+        m=demand,
+        E=machine,
+        lat=lat,
+        lon=lon,
+        gamma=LIVE_GAMMA,
+        m_U=LIVE_RHO_U * demand,
+        m_W=LIVE_RHO_W * demand if machine else 0.0,
+    )
 
 
 def _team_types(rows: list[dict]) -> list[TeamType]:
