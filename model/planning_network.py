@@ -72,6 +72,31 @@ class PlanningNetwork:
         return [visit for visit in self.visits if has_time(visit)]
 
 
+def useful_center_copies(instance: Instance) -> int:
+    """Aynı periyotta zamanı tutarlı merkez dönüşü sayısı.
+
+    Rapor ℓ'yi |I|+1'e kadar açar. En kısa gidiş-dönüş 2·min Sey sürdüğünden,
+    bir periyot penceresine sığmayan kopyanın uygulanabilir çözümü yoktur.
+    İlk dönüş pencerenin başında gelebilir; her ek dönüş bir gidiş-dönüş ister.
+    """
+
+    cap = len(instance.sites) + 1
+    min_sey = None
+    for scenario in instance.scenarios:
+        for center in instance.centers:
+            for site in instance.sites:
+                if route_h(instance, center.j, site.i, 1, scenario) != 1:
+                    continue
+                sey = travel_sey(instance, center.j, site.i, 1, scenario)
+                if sey is None or sey <= TIME_TOL:
+                    continue
+                min_sey = sey if min_sey is None else min(min_sey, sey)
+    if min_sey is None:
+        return cap
+    extra = int((instance.L + 1e-9) // (2.0 * min_sey))
+    return max(1, min(cap, 1 + extra))
+
+
 def build_planning_network(
     instance: Instance,
     periods: int,
@@ -93,7 +118,7 @@ def build_planning_network(
         for t in range(1, periods + 1)
     ]
     debris_at = {(visit.i, visit.t): visit for visit in debris}
-    copies = len(instance.sites) + 1
+    copies = useful_center_copies(instance)
     center_visits = [
         Visit("center", j=center.j, t=t, ell=ell)
         for center in instance.centers

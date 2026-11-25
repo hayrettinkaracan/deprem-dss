@@ -10,6 +10,7 @@ Arayüz hâlâ eski çözücüyü çağırır; canlı veride grup işi ve kadro 
 
 from __future__ import annotations
 
+import os
 import tempfile
 from dataclasses import dataclass, field
 
@@ -63,6 +64,7 @@ def solve_planning(
     time_limit: int = 120,
     vartheta: float = 0.01,
     eta: float = ETA,
+    threads: int | None = None,
     solver: pulp.LpSolver | None = None,
 ) -> PlanningSolution:
     """Üç senaryolu planlama. time_limit saniye; boşluk gizlenmez."""
@@ -73,12 +75,12 @@ def solve_planning(
     problem = _build(instance, network, staff, vartheta, eta)
     own_solver = solver is None
     if solver is None:
-        log_path = "/tmp/cbc-plan.log"
+        log_path = tempfile.NamedTemporaryFile(prefix="cbc-z1-", suffix=".log", delete=False).name
         solver = pulp.PULP_CBC_CMD(
             msg=False,
             timeLimit=time_limit,
             gapRel=0,
-            threads=1,
+            threads=threads or os.cpu_count() or 1,
             warmStart=True,
             logPath=log_path,
             options=["cuts off", "preprocess off", "heuristics on"],
@@ -212,6 +214,7 @@ def _build(
         )
     problem += pulp.lpSum(VU[center.j] for center in instance.centers) <= instance.U_top, "eq_4_12_U"
     problem += pulp.lpSum(VW[center.j] for center in instance.centers) <= instance.W_top, "eq_4_13_W"
+    _symmetry(problem, instance, staff, Y, network, reference)
 
     for scenario in instance.scenarios:
         for site in instance.sites:
@@ -341,6 +344,20 @@ def _build(
         for resource in staff.resources:
             for arc in network.team_arcs[scenario.s][resource.r]:
                 y = Y[(resource.r, arc.u.key, arc.v.key, scenario.s)]
+                if (
+                    arc.kind in {"wait", "continue"}
+                    and arc.u.period() is not None
+                    and arc.u.period() == arc.v.period()
+                ):
+                    tail = clock.get((resource.r, arc.u.key, scenario.s))
+                    head = clock.get((resource.r, arc.v.key, scenario.s))
+                    if tail is not None and head is not None:
+                        # Seçilen aynı periyot kopyasında saat geri gitmez.
+                        # M = L devre dışı bırakır; pencereler bunu sağlamaz.
+                        problem += (
+                            head[0] >= tail[1] - length * (1 - y),
+                            f"eq_4_32_ell_{resource.r}_{arc.u.key}_{arc.v.key}_{scenario.s}",
+                        )
                 if arc.v.kind == "debris" and arc.u.kind != "sigma":
                     problem += (
                         vartheta * y <= R[(resource.group, arc.v.i, arc.v.t, scenario.s)],
@@ -421,6 +438,35 @@ def _build(
         _idle_start(instance, network, staff, bundle)
     problem._z1_bundle = bundle
     return problem
+
+
+def _symmetry(problem, instance, staff, Y, network, reference: str) -> None:
+    """Aynı türden ayırt edilemeyen ekiplerin başlangıç merkezi sıralanır.
+
+    Düşük indisli ekip, düşük indisli merkeze (ya da daha önce sahaya) gider.
+    Yerleştirilmeyen ekip en sona yazılır. Fiziksel olarak farklı çözüm kesilmez.
+    """
+
+    buckets: dict[tuple, list] = {}
+    for resource in staff.resources:
+        buckets.setdefault((resource.group, resource.k, resource.p), []).append(resource)
+    sigma = network.sigma.key
+    omega = network.omega.key
+    parked = len(instance.centers) + 1
+    for members in buckets.values():
+        members.sort(key=lambda resource: resource.r)
+        for left, right in zip(members, members[1:]):
+            left_index = parked * Y[(left.r, sigma, omega, reference)]
+            right_index = parked * Y[(right.r, sigma, omega, reference)]
+            for index, center in enumerate(instance.centers, start=1):
+                origin = f"o_{center.j}"
+                left_key = (left.r, sigma, origin, reference)
+                right_key = (right.r, sigma, origin, reference)
+                if left_key in Y:
+                    left_index += index * Y[left_key]
+                if right_key in Y:
+                    right_index += index * Y[right_key]
+            problem += left_index <= right_index, f"sym_{left.r}_{right.r}"
 
 
 def _idle_start(instance: Instance, network: PlanningNetwork, staff: Staff, bundle: dict) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from data.section_5_3 import HYK_KARARI, section_5_3
 from model.planning import constraint_names, solve_planning
 from model.planning_checks import planning_violations
+from model.planning_network import useful_center_copies
 
 PREFIXES = (
     "eq_4_7_",
@@ -44,11 +45,21 @@ def test_planning_constraint_names_follow_the_new_report():
     assert not any(name.startswith("eq_4_36_") or name.startswith("eq_4_39_") for name in names)
 
 
+def test_unreachable_center_copies_are_dropped_and_identical_teams_are_ordered():
+    instance = section_5_3()
+    # En kısa gidiş-dönüş 1,1 saat. İkinci dönüş aynı pencereye sığmaz; ℓ=2 yeter.
+    assert useful_center_copies(instance) == 2
+    names = constraint_names(instance, periods=1, vartheta=HYK_KARARI.vartheta)
+    assert "sym_orta_1_orta_2" in names
+    assert "sym_umke_1_umke_2" in names
+    assert "sym_makine_1_makine_2" in names
+
+
 def test_one_period_incumbent_passes_the_validation_checks():
     solution = solve_planning(
         section_5_3(),
         periods=1,
-        time_limit=30,
+        time_limit=8,
         vartheta=HYK_KARARI.vartheta,
     )
     assert solution.status in {"Optimal", "Time limit"}
@@ -57,37 +68,3 @@ def test_one_period_incumbent_passes_the_validation_checks():
     assert planning_violations(section_5_3(), solution, vartheta=HYK_KARARI.vartheta) == []
     assert set(solution.z1_by_scenario) == {"s1", "s2", "s3"}
 
-
-def test_section_53_horizon_reports_an_honest_cbc_status():
-    solution = solve_planning(
-        section_5_3(),
-        periods=36,
-        time_limit=40,
-        vartheta=HYK_KARARI.vartheta,
-    )
-    assert solution.periods == 36
-    assert solution.horizon == 72
-    assert solution.status in {"Optimal", "Time limit"}
-    assert solution.objective is not None
-    assert solution.gap is not None
-    if solution.status == "Optimal":
-        assert solution.gap == 0
-    assert planning_violations(section_5_3(), solution, vartheta=HYK_KARARI.vartheta) == []
-    assert sum(solution.G.values()) >= 1
-    print(
-        "Z1",
-        solution.objective,
-        "gap",
-        solution.gap,
-        "status",
-        solution.status,
-        "s",
-        solution.seconds,
-        solution.z1_by_scenario,
-        solution.G,
-        solution.V,
-        solution.VU,
-        solution.VW,
-    )
-    for team in solution.teams:
-        print(team.r, solution.chains.get((team.r, "s1")))

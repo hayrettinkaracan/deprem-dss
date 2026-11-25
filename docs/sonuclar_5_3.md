@@ -1,6 +1,12 @@
 # 5.3 planlama sonucu (Z1)
 
-Kaynak: END4902_20261125, Çizelge 5.1 ve (4.2), (4.7)–(4.27), (4.30)–(4.32), (4.34). (4.28), Z2 ve ε bu çözümde yok. Amaç yalnız beklenen ağırlıklı kümülatif kalan iştir.
+Aşağıdaki sayılar, merkez kopyaları henüz |I|+1 iken tek iş parçacığı ve 40 saniye sınırla alınmış bir ara koşudur. Güncel model, zaman penceresine sığmayan ℓ kopyalarını atar, aynı tür ekiplerin başlangıcını sıralar ve bütün çekirdekleri kullanır. Yeni sayı için:
+
+```bash
+python -m scripts.run_5_3 --mode z1 --time-limit 900 --threads 4 --out docs/sonuclar_5_3.md
+```
+
+Kaynak: END4902_20261125, Çizelge 5.1 ve (4.2), (4.7)–(4.27), (4.30)–(4.32), (4.34). (4.28), Z2 ve ε bu ara koşuda yok. Amaç yalnız beklenen ağırlıklı kümülatif kalan iştir.
 
 Çözücü: PuLP 2.9.0, CBC 2.10.3, tek iş parçacığı, `gapRel = 0`, süre sınırı 40 saniye. Model 36 periyot, 3 senaryo, 9 ekiptir (yaklaşık 262 bin sütun). CBC kök aramasını bu sürede kapatamadı.
 
