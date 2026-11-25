@@ -70,9 +70,16 @@ Uzun CBC koşusu depoya gömülü değildir. Çizelge 5.1 planı yerelde üretil
 pip install -r requirements.txt
 python -m scripts.run_5_3 --mode z1 --time-limit 900 --threads 4 --out docs/sonuclar_5_3.md
 python -m scripts.run_5_3 --mode pareto --time-limit 120 --threads 4 --points 5 --out docs/sonuclar_5_3.md
+python -m scripts.run_5_3 --mode rehearsal --time-limit 60 --threads 4 --periods 36 --out docs/prova_5_3.md
 ```
 
-`--threads 0` bütün çekirdekleri kullanır. `--mode z1` yalnız (4.2). `--mode pareto` Z1’den sonra Z̄_2 ve Z_2 uçlarını, ardından beş ε noktasında Z1 + δ Z2 amaçlı (4.4) taramasını çalıştırır. Süre sınırında kalan noktanın durumu ve aralığı dosyada olduğu gibi durur.
+`--threads 0` bütün çekirdekleri kullanır. `--time-limit` her CBC çağrısı içindir.
+
+- `z1`: tek çağrı. 36 periyot, 4 çekirdekte çoğunlukla birkaç dakika ile 15 dakika. 900 s yerel bütçedir. Optimal garanti değildir.
+- `pareto`: Z1, iki Z2 ucu ve beş ε noktası, toplam 7 çağrı. 120 s ile üst sınır kabaca 15 dakikadır.
+- `rehearsal`: saat 1, 3, 5, 7, 9, 11 için hipotetik kayıt. Altı olay, olay başı bir çağrı. Tam ufukta olay başı 60 s ile kabaca 6 dakika. Kısa kontrol: `--max-events 1 --periods 2 --time-limit 15`.
+
+Süre sınırında kalan noktanın durumu ve aralığı dosyada olduğu gibi durur.
 
 ## Özellikler
 

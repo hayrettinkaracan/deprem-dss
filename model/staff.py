@@ -84,8 +84,9 @@ def can_serve(instance: Instance, resource: Resource, site: Site) -> bool:
     """Ekip bu enkaza girebilir mi. Rapor 4.3.2 kural 3 ve 4.2."""
 
     if resource.group == GROUP_A:
+        # k boşsa gönüllüdür; arama grubundadır ve her enkaza girebilir.
         if resource.k is None:
-            return False
+            return True
         return competency(instance, site.i, resource.k) == 1
     if resource.group in {GROUP_U, GROUP_G}:
         return True
