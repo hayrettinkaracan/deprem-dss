@@ -40,7 +40,7 @@ def test_planning_constraint_names_follow_the_new_report():
     names = constraint_names(section_5_3(), periods=2, vartheta=HYK_KARARI.vartheta)
     for prefix in PREFIXES:
         assert any(name.startswith(prefix) for name in names), prefix
-    assert not any(name.startswith("eq_4_28_") for name in names)
+    assert any(name.startswith("eq_4_28_") for name in names)
     assert not any(name.startswith("unmet") or name.startswith("primary_lock") for name in names)
     assert not any(name.startswith("eq_4_36_") or name.startswith("eq_4_39_") for name in names)
 

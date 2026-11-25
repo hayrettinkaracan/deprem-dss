@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import pulp
 
 from model.instance import Instance, validate
-from model.network import Arc
+from model.network import Arc, route_h, travel_sey
 from model.planning_network import PlanningNetwork, build_planning_network, has_time
 from model.staff import (
     GROUP_A,
@@ -401,6 +401,14 @@ def _build(
                         initial - R[(GROUP_A, arc.v.i, arc.v.t, scenario.s)] >= gate * y,
                         f"eq_4_19_{resource.r}_{arc.u.key}_{arc.v.key}_{scenario.s}",
                     )
+                if arc.u.kind == "debris" and arc.v.kind in {"center", "enroute"} and _is_har(arc):
+                    for nearer in nearer_centers(
+                        instance, scenario, arc.u.i, arc.v.j, arc.departure_t or arc.u.t
+                    ):
+                        problem += (
+                            y <= 1 - G[nearer],
+                            f"eq_4_28_{resource.r}_{arc.u.key}_{arc.v.key}_{nearer}_{scenario.s}",
+                        )
                 if arc.kind != "travel" or arc.m_uv is None:
                     continue
                 tail = clock.get((resource.r, arc.u.key, scenario.s))
@@ -687,7 +695,7 @@ def _manual_visits() -> dict[str, list[tuple]]:
             ("debris", ("I5", 4), 7.15, 8.0),
             ("debris", ("I5", 5), 8.0, 10.0),
             ("debris", ("I5", 6), 10.0, 11.65),
-            ("center", ("J1", 7, 1), 13.6, 13.6),
+            ("center", ("J2", 7, 1), 13.15, 13.15),
         ],
         "umke-1": [
             ("origin", ("J1",), 0.0, 2.0),
@@ -737,6 +745,29 @@ def _is_physical_entry(arc: Arc, site_i: str) -> bool:
         return False
     origin = arc.u.physical()
     return origin is not None and origin != site_i
+
+
+def nearer_centers(instance: Instance, scenario, site_i: str, center_j: str, t: int) -> list[str]:
+    """(4.28). Ulaşılabilir ve daha yakın merkezler. Eşit sürede küçük indis önce."""
+
+    target = travel_sey(instance, site_i, center_j, t, scenario)
+    if target is None:
+        return []
+    index = {center.j: place for place, center in enumerate(instance.centers)}
+    found = []
+    for center in instance.centers:
+        if center.j == center_j:
+            continue
+        if route_h(instance, site_i, center.j, t, scenario) != 1:
+            continue
+        sey = travel_sey(instance, site_i, center.j, t, scenario)
+        if sey is None:
+            continue
+        closer = sey < target - 1e-9
+        tied = abs(sey - target) <= 1e-9 and index[center.j] < index[center_j]
+        if closer or tied:
+            found.append(center.j)
+    return found
 
 
 def _is_har(arc: Arc) -> bool:
